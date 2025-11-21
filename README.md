@@ -258,7 +258,3 @@ The database schema is defined in `api/supabase-schema.sql`. Key tables:
 ## License
 
 This project is part of the TestLattice platform.
-=======
-# testlattice-backend
-ghost ai tester 
->>>>>>> a5c22db08a5122569c10eda4594941e4143c0daf
