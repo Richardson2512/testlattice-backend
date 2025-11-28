@@ -18,7 +18,7 @@ if (process.env.NODE_ENV === 'development') {
   }
   console.log('PINECONE_API_KEY:', process.env.PINECONE_API_KEY ? '✅ Set' : '❌ Missing')
   console.log('REDIS_URL:', process.env.REDIS_URL ? '✅ Set' : '❌ Missing')
-  console.log('MISTRAL_API_KEY:', process.env.MISTRAL_API_KEY ? '✅ Set' : '❌ Missing')
+  console.log('LLAMA_API_KEY:', process.env.LLAMA_API_KEY ? '✅ Set' : '❌ Missing')
 }
 
 // IMPORTANT: Import Sentry instrument second, after env vars are loaded
@@ -29,13 +29,15 @@ import IORedis from 'ioredis'
 import * as Sentry from '@sentry/node'
 import { config } from './config/env'
 import { JobData, TestRunStatus } from './types'
-import { MistralService } from './services/mistral'
-import { DeepseekService } from './services/deepseek'
+import { LlamaService } from './services/llama'
+import { QwenService } from './services/qwen'
+import { LayeredModelService } from './services/layeredModelService'
 import { StorageService } from './services/storage'
 import { PineconeService } from './services/pinecone'
 import { PlaywrightRunner } from './runners/playwright'
 import { AppiumRunner } from './runners/appium'
 import { TestProcessor } from './processors/testProcessor'
+import { VisionValidatorService } from './services/visionValidator'
 
 // Redis connection with error handling
 // Read directly from process.env first (after dotenv loads) to avoid config caching
@@ -97,35 +99,41 @@ connection.on('reconnecting', (delay) => {
   console.log(`🔄 Redis reconnecting in ${delay}ms...`)
 })
 
-// Initialize services
-const mistralService = new MistralService(config.mistral.apiKey || '')
+// Initialize Layered Model Service (new architecture)
+const layeredModelService = new LayeredModelService()
+console.log('✅ Layered Model Service initialized')
 
-// Initialize Deepseek service for instruction parsing
-let deepseekService: DeepseekService | null = null
-const deepseekApiKey = process.env.DEEPSEEK_API_KEY || config.deepseek.apiKey || ''
-if (deepseekApiKey) {
-  deepseekService = new DeepseekService(deepseekApiKey)
-  console.log('✅ Deepseek service initialized for instruction parsing')
-} else {
-  console.warn('⚠️  DEEPSEEK_API_KEY not found - instruction parsing will use fallback method')
-}
+// Keep legacy services for backward compatibility during transition
+// Llama defaults to local Ollama (no API key required)
+const llamaService = new LlamaService(
+  config.llama.apiKey || '', // Optional for local Ollama
+  config.llama.apiUrl || undefined, // Will default to localhost:11434/v1 in constructor
+  config.llama.model || undefined
+)
+
+// Initialize Qwen service for instruction parsing (legacy, will be replaced by layered service)
+// Qwen defaults to local Ollama (no API key required)
+let qwenService: QwenService | null = null
+// For local Ollama, API key is optional - always initialize QwenService
+qwenService = new QwenService(
+  config.qwen.apiKey || '', // Optional for local Ollama
+  config.qwen.apiUrl || undefined, // Will default to localhost:11434/v1 in constructor
+  config.qwen.model || undefined
+)
+console.log('✅ Qwen service initialized (legacy, will migrate to layered service)')
 // Initialize storage service with Supabase configuration
 // IMPORTANT: Use SERVICE_ROLE_KEY for storage operations to bypass RLS policies
-const supabaseUrl = process.env.SUPABASE_URL || config.supabase.url || ''
+// Uses config which validates env vars at startup
+const supabaseUrl = config.supabase.url
 // Worker MUST use service role key for storage uploads (bypasses RLS)
 // Storage policies require service_role for INSERT operations
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || config.supabase.serviceRoleKey || ''
-const supabaseAnonKey = process.env.SUPABASE_KEY || config.supabase.storageKey || ''
-
-if (!supabaseServiceRoleKey) {
-  console.warn('⚠️  WARNING: SUPABASE_SERVICE_ROLE_KEY not found in worker/.env')
-  console.warn('⚠️  Storage uploads will fail with RLS policy violations')
-  console.warn('⚠️  Please add SUPABASE_SERVICE_ROLE_KEY to worker/.env')
-}
+const supabaseServiceRoleKey = config.supabase.serviceRoleKey
+const supabaseAnonKey = config.supabase.storageKey || config.supabase.key
+const supabaseBucket = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts'
 
 // Use service role key (required for storage), fall back to anon key only if service role not available
 const storageKey = supabaseServiceRoleKey || supabaseAnonKey
-const storageService = new StorageService(supabaseUrl, storageKey)
+const storageService = new StorageService(supabaseUrl, storageKey, supabaseBucket)
 
 // Lazy Pinecone initialization - only create if API key is available
 // Read directly from process.env to avoid config module caching issues
@@ -152,14 +160,35 @@ function getPineconeService(): PineconeService | null {
 const playwrightRunner = new PlaywrightRunner(config.testRunners.playwrightGridUrl)
 const appiumRunner = new AppiumRunner(config.testRunners.appiumUrl)
 
+// Optional vision validator (OpenAI GPT-4V or compatible VLM)
+// Note: LayeredModelService handles vision via GPT-4V, but we keep this for backward compatibility
+let visionValidatorService: VisionValidatorService | null = null
+const visionApiKey = process.env.OPENAI_API_KEY || process.env.VISION_API_KEY || ''
+if (visionApiKey) {
+  try {
+    visionValidatorService = new VisionValidatorService(visionApiKey, config.vision.model)
+    console.log(`✅ Vision validator ready (model: ${config.vision.model}, interval: ${config.vision.validatorInterval})`)
+    console.log('   Note: LayeredModelService will use GPT-4V for vision analysis')
+  } catch (error: any) {
+    console.warn('⚠️  Failed to initialize vision validator:', error.message)
+    visionValidatorService = null
+  }
+} else {
+  console.log('ℹ️  Vision validator disabled (OPENAI_API_KEY not configured)')
+  console.log('   Note: Set OPENAI_API_KEY to enable GPT-4V vision layer')
+}
+
 // Create test processor
 const testProcessor = new TestProcessor(
-  mistralService,
-  deepseekService, // Deepseek service for instruction parsing
+  llamaService,
+  qwenService, // Qwen service for instruction parsing (legacy)
   storageService,
   getPineconeService(), // Use lazy getter - will return null if API key not available
   playwrightRunner,
-  appiumRunner
+  appiumRunner,
+  visionValidatorService,
+  config.vision.validatorInterval,
+  layeredModelService // New layered model service
 )
 
 // Worker processor
@@ -171,6 +200,18 @@ async function processTestJob(jobData: JobData) {
   try {
     // Process test run
     const result = await testProcessor.process(jobData)
+    
+    // If we're waiting for approval, don't mark the run as completed yet
+    if (result.stage === 'diagnosis') {
+      console.log(`[${runId}] Diagnosis finished. Awaiting user approval before execution.`)
+      return {
+        success: true,
+        runId,
+        steps: result.steps.length,
+        artifacts: result.artifacts.length,
+        stage: 'diagnosis',
+      }
+    }
     
     // Update test run status via API
     const apiUrl = config.api.url || process.env.API_URL || 'http://localhost:3001'
@@ -185,7 +226,6 @@ async function processTestJob(jobData: JobData) {
           status: updateStatus,
           steps: result.steps,
           completedAt: new Date().toISOString(),
-          reportUrl: result.artifacts[0], // First artifact as report URL
         }),
       })
     } catch (apiError) {
@@ -202,6 +242,7 @@ async function processTestJob(jobData: JobData) {
       runId,
       steps: result.steps.length,
       artifacts: result.artifacts.length,
+      stage: 'execution',
     }
   } catch (error: any) {
     console.error(`[${runId}] Test job failed:`, error)

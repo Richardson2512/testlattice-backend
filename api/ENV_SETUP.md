@@ -33,8 +33,15 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhY
 # Redis Configuration
 REDIS_URL=redis://default:rWoyaB8mX9IeH1e1jV5UUhzmHZrMSPqh@redis-17888.c62.us-east-1-4.ec2.cloud.redislabs.com:17888
 
-# Mistral AI Configuration
-MISTRAL_API_KEY=SAGSIDFn5jswMLonGjLJX5rKo7n91OlG
+# Llama 4 (Local Ollama)
+LLAMA_API_KEY=ollama
+LLAMA_API_URL=http://localhost:11434/v1
+LLAMA_MODEL=llama3.2:latest
+
+# Qwen Instruct (Local Ollama)
+QWEN_API_KEY=ollama
+QWEN_API_URL=http://localhost:11434/v1
+QWEN_MODEL=qwen2.5:latest
 
 # Pinecone Configuration
 PINECONE_API_KEY=pcsk_3DXKLG_RVif7NDP1SjVQV8WkFpyfa1tvfZcWkKoERzqgnc6wmfvqGXXqDrgBev3rSBSgzr
@@ -52,6 +59,14 @@ APP_URL=http://localhost:3000
 # Stripe (not configured - not needed)
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
+
+# WebRTC Live Streaming Configuration
+FRAME_STREAM_BASE_URL=http://localhost:8080
+
+# Optional: LiveKit Configuration (for future WebRTC upgrade)
+# LIVEKIT_URL=wss://your-livekit-server.com
+# LIVEKIT_API_KEY=your-api-key
+# LIVEKIT_API_SECRET=your-api-secret
 ```
 
 ### Step 3: Save the File

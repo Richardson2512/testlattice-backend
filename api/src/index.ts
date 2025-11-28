@@ -42,6 +42,9 @@ import { testRoutes } from './routes/tests'
 import { projectRoutes } from './routes/projects'
 import { integrationRoutes } from './routes/integrations'
 import { billingRoutes } from './routes/billing'
+import { TestControlWebSocket } from './lib/websocket'
+import { RedisWebSocketManager } from './lib/websocketRedis'
+import { startCleanupScheduler } from './jobs/cleanupArtifacts'
 
 const fastify = Fastify({
   logger: true,
@@ -89,6 +92,41 @@ async function registerRoutes() {
   // Health check
   fastify.get('/health', async (request, reply) => {
     return { status: 'ok', timestamp: new Date().toISOString() }
+  })
+
+  // WebSocket stats (for monitoring)
+  fastify.get('/api/ws/stats', async (request, reply) => {
+    if (!testControlWS) {
+      return reply.code(503).send({ error: 'WebSocket server not initialized' })
+    }
+
+    // Check if it's RedisWebSocketManager (has getStats method)
+    if ('getStats' in testControlWS && typeof testControlWS.getStats === 'function') {
+      const stats = await testControlWS.getStats()
+      return reply.send(stats)
+    }
+
+    return reply.send({
+      message: 'Using legacy WebSocket (no stats available)',
+      type: 'in-memory'
+    })
+  })
+
+  // Cleanup stats (for monitoring)
+  fastify.get('/api/cleanup/stats', async (request, reply) => {
+    try {
+      const { getCleanupStats } = await import('./jobs/cleanupArtifacts')
+      const stats = await getCleanupStats()
+      
+      if (!stats) {
+        return reply.code(500).send({ error: 'Failed to fetch cleanup stats' })
+      }
+
+      return reply.send(stats)
+    } catch (error: any) {
+      fastify.log.error('Error fetching cleanup stats:', error)
+      return reply.code(500).send({ error: error.message })
+    }
   })
 
   // Debug endpoint for testing Sentry (optional)
@@ -142,6 +180,13 @@ async function registerRoutes() {
   })
 }
 
+// Global WebSocket instance for test control (Human-in-the-Loop)
+let testControlWS: TestControlWebSocket | RedisWebSocketManager | null = null
+
+export function getTestControlWS(): TestControlWebSocket | RedisWebSocketManager | null {
+  return testControlWS
+}
+
 // Start server
 async function start() {
   try {
@@ -161,6 +206,26 @@ async function start() {
     
     await fastify.listen({ port, host })
     fastify.log.info(`Server listening on http://${host}:${port}`)
+    
+    // Initialize WebSocket server for real-time test control (God Mode)
+    // Use Redis-backed WebSocket for horizontal scaling
+    const useRedis = process.env.USE_REDIS_WEBSOCKET !== 'false' // Default to true
+    
+    if (useRedis && process.env.REDIS_URL) {
+      testControlWS = new RedisWebSocketManager(fastify.server, process.env.REDIS_URL)
+      fastify.log.info('✅ Redis-backed WebSocket initialized (scalable across multiple servers)')
+    } else {
+      testControlWS = new TestControlWebSocket(fastify.server)
+      fastify.log.warn('⚠️  Using in-memory WebSocket (not scalable - set REDIS_URL for production)')
+    }
+    
+    // Start artifact cleanup scheduler
+    if (process.env.ENABLE_ARTIFACT_CLEANUP !== 'false') {
+      startCleanupScheduler()
+      fastify.log.info('✅ Artifact cleanup scheduler started')
+    } else {
+      fastify.log.info('Artifact cleanup scheduler disabled (set ENABLE_ARTIFACT_CLEANUP=true to enable)')
+    }
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)

@@ -13,6 +13,8 @@ export enum TestRunStatus {
   COMPLETED = 'completed',
   FAILED = 'failed',
   CANCELLED = 'cancelled',
+  DIAGNOSING = 'diagnosing',
+  WAITING_APPROVAL = 'waiting_approval',
 }
 
 export enum DeviceProfile {
@@ -40,11 +42,29 @@ export interface TestProfile {
   };
 }
 
+export type TestEnvironment = 'development' | 'staging' | 'production';
+
+export interface ApprovalPolicy {
+  mode?: 'manual' | 'auto' | 'auto_on_clean';
+  maxBlockers?: number;
+  channels?: Array<'dashboard' | 'slack'>;
+}
+
 export interface TestOptions {
   visualDiff?: boolean;
   stressTest?: boolean;
   coverage?: string[];
   maxSteps?: number;
+  testMode?: 'single' | 'multi' | 'all' | 'monkey';
+  allPages?: boolean;
+  monkeyMode?: boolean;
+  monkeyConfig?: {
+    randomness?: number;
+    maxExplorations?: number;
+    allowNavigation?: boolean;
+  };
+  environment?: TestEnvironment;
+  approvalPolicy?: ApprovalPolicy;
 }
 
 export interface CreateTestRunRequest {
@@ -69,9 +89,69 @@ export interface TestRun {
   error?: string;
   reportUrl?: string;
   artifactsUrl?: string;
+  traceUrl?: string; // Fallback for trace URL if artifact save fails
+  streamUrl?: string; // WebRTC/live streaming URL for real-time test viewing
   steps?: TestStep[];
   paused?: boolean;
   currentStep?: number;
+  diagnosis?: DiagnosisResult;
+  diagnosisProgress?: DiagnosisProgress;
+}
+
+export interface DiagnosisComponentInsight {
+  name: string;
+  selector: string;
+  description: string;
+  testability: 'high' | 'medium' | 'low';
+}
+
+export interface DiagnosisIssueInsight {
+  name: string;
+  reason: string;
+}
+
+export interface DiagnosisPageSummary {
+  id: string;
+  label?: string;
+  url?: string;
+  action?: string;
+  title?: string;
+  screenshotUrl?: string;
+  screenshotUrls?: string[]; // All screenshots captured during scrolling
+  summary: string;
+  testableComponents: DiagnosisComponentInsight[];
+  nonTestableComponents: DiagnosisIssueInsight[];
+  recommendedTests: string[];
+  errors?: string[];
+  blockedSelectors?: string[];
+}
+
+export interface DiagnosisResult {
+  screenshotUrl?: string;
+  summary: string;
+  testableComponents: DiagnosisComponentInsight[];
+  nonTestableComponents: DiagnosisIssueInsight[];
+  recommendedTests: string[];
+  pages?: DiagnosisPageSummary[];
+  blockedSelectors?: string[];
+}
+
+// Real-time diagnosis progress tracking
+export interface DiagnosisProgress {
+  step: number;              // Current main step (1-5 for single, 1-6 for multi)
+  totalSteps: number;        // Total main steps
+  stepLabel: string;         // Human-readable step description
+  subStep: number;           // Current sub-step within main step
+  totalSubSteps: number;     // Total sub-steps in current main step
+  subStepLabel?: string;     // Human-readable sub-step description
+  percent: number;           // Overall progress 0-100
+}
+
+export interface SelfHealingInfo {
+  strategy: 'text' | 'attribute' | 'position' | 'fallback';
+  originalSelector?: string;
+  healedSelector: string;
+  note: string;
 }
 
 export interface TestStep {
@@ -85,12 +165,27 @@ export interface TestStep {
   domSnapshot?: string;
   success: boolean;
   error?: string;
+  mode?: 'llm' | 'speculative' | 'monkey';
+  selfHealing?: SelfHealingInfo;
+  // Visual annotation data for Iron Man HUD
+  elementBounds?: Array<{
+    selector: string;
+    bounds: { x: number; y: number; width: number; height: number };
+    type: string;
+    text?: string;
+    interactionType?: 'clicked' | 'typed' | 'analyzed' | 'failed' | 'healed';
+  }>;
+  targetElementBounds?: {
+    selector: string;
+    bounds: { x: number; y: number; width: number; height: number };
+    interactionType: 'clicked' | 'typed' | 'analyzed' | 'failed' | 'healed';
+  };
 }
 
 export interface TestArtifact {
   id: string;
   runId: string;
-  type: 'screenshot' | 'video' | 'log' | 'dom' | 'network';
+  type: 'screenshot' | 'video' | 'log' | 'dom' | 'network' | 'trace';
   url: string;
   path: string;
   size: number;

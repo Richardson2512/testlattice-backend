@@ -1,12 +1,15 @@
-// Deepseek API service for understanding and parsing user instructions
+// Qwen Instruct API service for understanding and parsing user instructions
 import axios from 'axios'
 
-interface DeepseekMessage {
+const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase()
+const DEBUG_QWEN = LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true'
+
+interface QwenMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
 }
 
-interface DeepseekResponse {
+interface QwenResponse {
   choices: Array<{
     message: {
       role: string
@@ -24,16 +27,34 @@ export interface ParsedInstructions {
   structuredPlan: string
 }
 
-export class DeepseekService {
+export class QwenService {
   private apiKey: string
-  private apiUrl = 'https://api.deepseek.com/v1'
+  private apiUrl: string
+  private model: string
+  private isLocalOllama: boolean = false
 
-  constructor(apiKey: string) {
-    this.apiKey = apiKey
+  constructor(apiKey: string, apiUrl?: string, model?: string) {
+    this.apiKey = apiKey || ''
+    // Default to local Ollama (localhost:11434) for local installation
+    const defaultUrl = process.env.QWEN_API_URL || 'http://localhost:11434/v1'
+    this.apiUrl = apiUrl || defaultUrl
+    
+    // Detect if this is a local Ollama instance
+    this.isLocalOllama = this.apiUrl.includes('localhost') || 
+                         this.apiUrl.includes('127.0.0.1') || 
+                         this.apiUrl.includes(':11434')
+    
+    this.model = model || process.env.QWEN_MODEL || 'qwen2.5:latest'
+    
+    if (this.isLocalOllama) {
+      console.log(`QwenService: Using local Ollama at ${this.apiUrl} (no API key required)`)
+    } else {
+      console.log(`QwenService: Using remote API at ${this.apiUrl} (API key required)`)
+    }
   }
 
   /**
-   * Parse and understand user instructions using Deepseek
+   * Parse and understand user instructions using Qwen
    * Returns structured understanding of what the user wants to test
    */
   async parseInstructions(userInstructions: string, currentUrl?: string): Promise<ParsedInstructions> {
@@ -50,7 +71,9 @@ export class DeepseekService {
         }
       }
 
-      console.log('Deepseek: Parsing user instructions:', userInstructions.substring(0, 100))
+      if (DEBUG_QWEN) {
+        console.log('Qwen: Parsing user instructions:', userInstructions.substring(0, 100))
+      }
 
       const systemPrompt = `You are an expert test instruction analyzer. Your job is to understand user-provided testing instructions and break them down into a structured, actionable plan.
 
@@ -79,41 +102,54 @@ ${currentUrl ? `Current Website: ${currentUrl}` : ''}
 
 Analyze these instructions and provide a structured test plan.`
 
-      const messages: DeepseekMessage[] = [
+      const messages: QwenMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ]
 
-      const response = await axios.post<DeepseekResponse>(
+      // Build headers - only use Bearer auth for remote APIs, not local Ollama
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      }
+      
+      // Only add Authorization header for remote APIs (OpenAI, etc.)
+      if (!this.isLocalOllama && this.apiKey) {
+        headers['Authorization'] = `Bearer ${this.apiKey}`
+      } else if (this.isLocalOllama && this.apiKey && this.apiKey !== 'ollama' && this.apiKey.trim() !== '') {
+        // Some Ollama setups might use custom auth, but typically not needed
+        headers['Authorization'] = `Bearer ${this.apiKey}`
+      }
+      
+      const response = await axios.post<QwenResponse>(
         `${this.apiUrl}/chat/completions`,
         {
-          model: 'deepseek-chat',
+          model: this.model,
           messages,
           temperature: 0.3, // Lower temperature for more consistent parsing
           response_format: { type: 'json_object' }
         },
         {
-          headers: {
-            'Authorization': `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json'
-          }
+          headers,
+          timeout: 30000
         }
       )
 
       const content = response.data.choices[0]?.message?.content
       if (!content) {
-        throw new Error('No response from Deepseek API')
+        throw new Error('No response from Qwen API')
       }
 
-      console.log('Deepseek: Raw response:', content.substring(0, 300))
+      if (DEBUG_QWEN) {
+        console.log('Qwen: Raw response:', content.substring(0, 300))
+      }
 
       // Parse JSON response
       let parsedData: any
       try {
         parsedData = JSON.parse(content)
       } catch (parseError: any) {
-        console.error('Deepseek: Failed to parse JSON response:', parseError.message)
-        console.error('Deepseek: Raw response:', content)
+        console.error('Qwen: Failed to parse JSON response:', parseError.message)
+        console.error('Qwen: Raw response:', content)
         // Fallback to simple parsing
         return this.fallbackParse(userInstructions)
       }
@@ -128,21 +164,23 @@ Analyze these instructions and provide a structured test plan.`
         structuredPlan: parsedData.structuredPlan || userInstructions,
       }
 
-      console.log('Deepseek: Parsed instructions:', JSON.stringify(parsed, null, 2))
+      if (DEBUG_QWEN) {
+        console.log('Qwen: Parsed instructions:', JSON.stringify(parsed, null, 2))
+      }
 
       return parsed
     } catch (error: any) {
-      console.error('Deepseek API error:', error.message)
+      console.error('Qwen API error:', error.message)
       // Fallback to simple parsing if API fails
       return this.fallbackParse(userInstructions)
     }
   }
 
   /**
-   * Fallback parser if Deepseek API fails
+   * Fallback parser if Qwen API fails
    */
   private fallbackParse(userInstructions: string): ParsedInstructions {
-    console.warn('Deepseek: Using fallback parser')
+    console.warn('Qwen: Using fallback parser')
     
     // Simple keyword-based parsing
     const lowerInstructions = userInstructions.toLowerCase()

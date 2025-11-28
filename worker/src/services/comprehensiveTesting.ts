@@ -4,6 +4,8 @@
  */
 
 import { Page } from 'playwright'
+import type { DesignSpec } from '../types'
+import type { VisionValidatorService } from './visionValidator'
 
 export interface ConsoleError {
   type: 'error' | 'warning' | 'info'
@@ -53,16 +55,37 @@ export interface AccessibilityIssue {
 }
 
 export interface VisualIssue {
-  type: 'layout-shift' | 'text-overflow' | 'element-overlap' | 'missing-element' | 'misaligned'
+  type: 
+    | 'layout-shift' 
+    | 'text-overflow' 
+    | 'element-overlap' 
+    | 'missing-element' 
+    | 'misaligned'
+    | 'alignment-issue'        // NEW: Elements not aligned correctly
+    | 'spacing-inconsistent'   // NEW: Inconsistent padding/margins
+    | 'broken-image'           // NEW: Images failed to load
+    | 'color-inconsistent'     // NEW: Color doesn't match design spec
+    | 'typography-inconsistent' // NEW: Font doesn't match design spec
+    | 'missing-hover-state'    // NEW: No visual feedback on hover
+    | 'missing-focus-state'    // NEW: No visual feedback on focus
+    | 'error-message-placement' // NEW: Error message in wrong location
+    | 'error-message-clarity'  // NEW: Error message unclear/grammatically incorrect
   element?: string
   selector?: string
   description: string
   severity: 'high' | 'medium' | 'low'
   screenshot?: string
+  // NEW: Additional metadata for better reporting
+  expectedValue?: string       // What was expected (from design spec)
+  actualValue?: string        // What was found
+  recommendation?: string      // How to fix
+  // Environment metadata for compatibility & responsiveness testing
+  browserEngine?: string       // e.g., 'chromium', 'firefox', 'webkit'
+  viewport?: string            // e.g., '390x844', 'mobile-portrait'
+  orientation?: 'portrait' | 'landscape'
 }
 
 export interface DOMHealth {
-  brokenLinks: Array<{ url: string; selector: string; status: number }>
   missingAltText: Array<{ selector: string; element: string }>
   missingLabels: Array<{ selector: string; element: string }>
   orphanedElements: Array<{ selector: string; element: string }>
@@ -77,7 +100,6 @@ export interface ComprehensiveTestResults {
   accessibility: AccessibilityIssue[]
   visualIssues: VisualIssue[]
   domHealth: DOMHealth
-  brokenLinks: Array<{ url: string; selector: string; status: number }>
 }
 
 export class ComprehensiveTestingService {
@@ -87,6 +109,32 @@ export class ComprehensiveTestingService {
   private accessibilityIssues: AccessibilityIssue[] = []
   private visualIssues: VisualIssue[] = []
   private domHealthData: DOMHealth | null = null
+  private designSpec: DesignSpec | null = null
+  private visionValidator: VisionValidatorService | null = null
+
+  /**
+   * Initialize comprehensive testing on a page
+   * @param designSpec - Optional design specification for visual consistency checks
+   * @param visionValidator - Optional GPT-4V service for AI-powered visual checks
+   */
+  constructor(designSpec?: DesignSpec, visionValidator?: VisionValidatorService | null) {
+    this.designSpec = designSpec || null
+    this.visionValidator = visionValidator || null
+  }
+
+  /**
+   * Update design specification (can be called after construction)
+   */
+  setDesignSpec(designSpec: DesignSpec | null): void {
+    this.designSpec = designSpec
+  }
+
+  /**
+   * Update vision validator (can be called after construction)
+   */
+  setVisionValidator(visionValidator: VisionValidatorService | null): void {
+    this.visionValidator = visionValidator
+  }
 
   /**
    * Initialize comprehensive testing on a page
@@ -196,8 +244,15 @@ export class ComprehensiveTestingService {
           // Try to generate a selector
           let selector = ''
           if (el.id) selector = `#${el.id}`
-          else if (el.className) selector = `.${el.className.split(' ')[0]}`
-          else selector = el.tagName.toLowerCase()
+          else if (el.className) {
+            // Handle SVG elements (className can be SVGAnimatedString) and null cases
+            const className = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              selector = `.${className.split(' ')[0]}`
+            } else {
+              selector = el.tagName.toLowerCase()
+            }
+          } else selector = el.tagName.toLowerCase()
           
           elements.push({
             selector,
@@ -236,8 +291,15 @@ export class ComprehensiveTestingService {
         if (color === bgColor || (color.includes('rgb') && bgColor.includes('rgb') && color === bgColor)) {
           let selector = ''
           if (el.id) selector = `#${el.id}`
-          else if (el.className) selector = `.${el.className.split(' ')[0]}`
-          else selector = el.tagName.toLowerCase()
+          else if (el.className) {
+            // Handle SVG elements (className can be SVGAnimatedString) and null cases
+            const className = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              selector = `.${className.split(' ')[0]}`
+            } else {
+              selector = el.tagName.toLowerCase()
+            }
+          } else selector = el.tagName.toLowerCase()
           
           issues.push({
             selector,
@@ -272,8 +334,15 @@ export class ComprehensiveTestingService {
         if (tabIndex === '-1') {
           let selector = ''
           if (el.id) selector = `#${el.id}`
-          else if (el.className) selector = `.${el.className.split(' ')[0]}`
-          else selector = el.tagName.toLowerCase()
+          else if (el.className) {
+            // Handle SVG elements (className can be SVGAnimatedString) and null cases
+            const className = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              selector = `.${className.split(' ')[0]}`
+            } else {
+              selector = el.tagName.toLowerCase()
+            }
+          } else selector = el.tagName.toLowerCase()
           
           issues.push({
             selector,
@@ -306,7 +375,6 @@ export class ComprehensiveTestingService {
    */
   async analyzeDOMHealth(page: Page): Promise<DOMHealth> {
     const health = await page.evaluate(() => {
-      const brokenLinks: Array<{ url: string; selector: string; status: number }> = []
       const missingAltText: Array<{ selector: string; element: string }> = []
       const missingLabels: Array<{ selector: string; element: string }> = []
       const orphanedElements: Array<{ selector: string; element: string }> = []
@@ -318,8 +386,15 @@ export class ComprehensiveTestingService {
         if (!img.alt && !img.hasAttribute('aria-label')) {
           let selector = ''
           if (img.id) selector = `#${img.id}`
-          else if (img.className) selector = `.${img.className.split(' ')[0]}`
-          else selector = 'img'
+          else if (img.className) {
+            // Handle SVG elements (className can be SVGAnimatedString) and null cases
+            const className = typeof img.className === 'string' ? img.className : (img.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              selector = `.${className.split(' ')[0]}`
+            } else {
+              selector = 'img'
+            }
+          } else selector = 'img'
           
           missingAltText.push({
             selector,
@@ -359,8 +434,15 @@ export class ComprehensiveTestingService {
         if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0' || rect.width === 0 || rect.height === 0) {
           let selector = ''
           if (el.id) selector = `#${el.id}`
-          else if (el.className) selector = `.${el.className.split(' ')[0]}`
-          else selector = el.tagName.toLowerCase()
+          else if (el.className) {
+            // Handle SVG elements (className can be SVGAnimatedString) and null cases
+            const className = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              selector = `.${className.split(' ')[0]}`
+            } else {
+              selector = el.tagName.toLowerCase()
+            }
+          } else selector = el.tagName.toLowerCase()
           
           let reason = ''
           if (style.display === 'none') reason = 'display: none'
@@ -377,7 +459,6 @@ export class ComprehensiveTestingService {
       })
 
       return {
-        brokenLinks,
         missingAltText,
         missingLabels,
         orphanedElements,
@@ -395,55 +476,852 @@ export class ComprehensiveTestingService {
   }
 
   /**
-   * Check for broken links
+   * Check layout and alignment issues
+   * Programmatic checks - no AI needed
    */
-  async checkBrokenLinks(page: Page): Promise<Array<{ url: string; selector: string; status: number }>> {
-    const links = await page.evaluate(() => {
-      const linkData: Array<{ url: string; selector: string }> = []
-      const anchorTags = document.querySelectorAll('a[href]')
-      
-      anchorTags.forEach((link) => {
-        const href = (link as HTMLAnchorElement).href
-        if (href && !href.startsWith('#') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
+  async checkLayoutAndAlignment(page: Page): Promise<VisualIssue[]> {
+    const issues: VisualIssue[] = []
+
+    // Helper function to get selector
+    const getSelector = (el: Element): string => {
+      if (el.id) return `#${el.id}`
+      if (el.className) {
+        const className = typeof el.className === 'string' 
+          ? el.className 
+          : (el.className?.baseVal || '')
+        if (className && typeof className === 'string') {
+          return `.${className.split(' ')[0]}`
+        }
+      }
+      return el.tagName.toLowerCase()
+    }
+
+    // Check element alignment
+    const alignmentIssues = await page.evaluate(() => {
+      const issues: Array<{
+        selector: string
+        element: string
+        issue: string
+        expected: string
+        actual: string
+      }> = []
+
+      // Check text alignment consistency in containers
+      const containers = document.querySelectorAll('div, section, article, main, header, footer')
+      containers.forEach((container) => {
+        const textElements = container.querySelectorAll('p, h1, h2, h3, h4, h5, h6, span, a')
+        if (textElements.length === 0) return
+
+        const alignments = new Set<string>()
+        textElements.forEach((el) => {
+          const style = window.getComputedStyle(el)
+          const textAlign = style.textAlign || 'left'
+          alignments.add(textAlign)
+        })
+
+        // If multiple alignments in same container, flag inconsistency
+        if (alignments.size > 1) {
           let selector = ''
-          if (link.id) selector = `#${link.id}`
-          else if (link.className) selector = `.${link.className.split(' ')[0]}`
-          else selector = `a[href="${href}"]`
-          
-          linkData.push({
-            url: href,
+          if (container.id) selector = `#${container.id}`
+          else if (container.className) {
+            const className = typeof container.className === 'string' 
+              ? container.className 
+              : (container.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              selector = `.${className.split(' ')[0]}`
+            } else {
+              selector = container.tagName.toLowerCase()
+            }
+          } else selector = container.tagName.toLowerCase()
+
+          issues.push({
             selector,
+            element: container.tagName.toLowerCase(),
+            issue: 'mixed-alignment',
+            expected: 'Consistent text alignment',
+            actual: `Mixed alignments: ${Array.from(alignments).join(', ')}`
           })
         }
       })
-      
-      return linkData
+
+      return issues
     })
 
-    // Check each link (sample first 10 to avoid timeout)
-    const brokenLinks: Array<{ url: string; selector: string; status: number }> = []
-    for (const link of links.slice(0, 10)) {
-      try {
-        const response = await page.goto(link.url, { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => null)
-        if (!response || response.status() >= 400) {
-          brokenLinks.push({
-            url: link.url,
-            selector: link.selector,
-            status: response?.status() || 0,
+    alignmentIssues.forEach((item) => {
+      issues.push({
+        type: 'alignment-issue',
+        element: item.element,
+        selector: item.selector,
+        description: `Inconsistent text alignment in ${item.selector}: ${item.actual}`,
+        severity: 'medium',
+        expectedValue: item.expected,
+        actualValue: item.actual,
+        recommendation: `Ensure all text elements in ${item.selector} use consistent alignment`
+      })
+    })
+
+    // Check for overlapping elements
+    const overlapIssues = await page.evaluate(() => {
+      const issues: Array<{
+        selector1: string
+        selector2: string
+        element1: string
+        element2: string
+      }> = []
+
+      const allElements = Array.from(document.querySelectorAll('*'))
+        .filter(el => {
+          const style = window.getComputedStyle(el)
+          const rect = el.getBoundingClientRect()
+          return style.display !== 'none' && 
+                 style.visibility !== 'hidden' &&
+                 rect.width > 0 && 
+                 rect.height > 0
+        })
+
+      for (let i = 0; i < allElements.length; i++) {
+        for (let j = i + 1; j < allElements.length; j++) {
+          const el1 = allElements[i]
+          const el2 = allElements[j]
+
+          // Skip if one is a child of the other
+          if (el1.contains(el2) || el2.contains(el1)) continue
+
+          const rect1 = el1.getBoundingClientRect()
+          const rect2 = el2.getBoundingClientRect()
+
+          // Check for overlap
+          const overlaps = !(
+            rect1.right < rect2.left ||
+            rect1.left > rect2.right ||
+            rect1.bottom < rect2.top ||
+            rect1.top > rect2.bottom
+          )
+
+          if (overlaps) {
+            const getSelector = (el: Element): string => {
+              if (el.id) return `#${el.id}`
+              if (el.className) {
+                const className = typeof el.className === 'string' 
+                  ? el.className 
+                  : (el.className?.baseVal || '')
+                if (className && typeof className === 'string') {
+                  return `.${className.split(' ')[0]}`
+                }
+              }
+              return el.tagName.toLowerCase()
+            }
+
+            issues.push({
+              selector1: getSelector(el1),
+              selector2: getSelector(el2),
+              element1: el1.tagName.toLowerCase(),
+              element2: el2.tagName.toLowerCase()
+            })
+          }
+        }
+      }
+
+      return issues
+    })
+
+    overlapIssues.forEach((item) => {
+      issues.push({
+        type: 'element-overlap',
+        element: `${item.element1} and ${item.element2}`,
+        selector: `${item.selector1} and ${item.selector2}`,
+        description: `Elements overlap: ${item.selector1} overlaps with ${item.selector2}`,
+        severity: 'high',
+        recommendation: `Adjust positioning or z-index to prevent overlap between ${item.selector1} and ${item.selector2}`
+      })
+    })
+
+    // Check spacing consistency
+    if (this.designSpec?.minSpacing) {
+      const spacingIssues = await page.evaluate((minSpacing) => {
+        const issues: Array<{
+          selector: string
+          element: string
+          spacing: number
+        }> = []
+
+        const containers = document.querySelectorAll('div, section, article, main')
+        containers.forEach((container) => {
+          const children = Array.from(container.children)
+            .filter(child => {
+              const style = window.getComputedStyle(child)
+              return style.display !== 'none' && style.visibility !== 'hidden'
+            })
+
+          for (let i = 0; i < children.length - 1; i++) {
+            const rect1 = children[i].getBoundingClientRect()
+            const rect2 = children[i + 1].getBoundingClientRect()
+            
+            // Calculate vertical spacing
+            const spacing = Math.abs(rect2.top - rect1.bottom)
+            
+            if (spacing > 0 && spacing < minSpacing) {
+              const getSelector = (el: Element): string => {
+                if (el.id) return `#${el.id}`
+                if (el.className) {
+                  const className = typeof el.className === 'string' 
+                    ? el.className 
+                    : (el.className?.baseVal || '')
+                  if (className && typeof className === 'string') {
+                    return `.${className.split(' ')[0]}`
+                  }
+                }
+                return el.tagName.toLowerCase()
+              }
+
+              issues.push({
+                selector: getSelector(children[i]),
+                element: children[i].tagName.toLowerCase(),
+                spacing
+              })
+            }
+          }
+        })
+
+        return issues
+      }, this.designSpec.minSpacing)
+
+      spacingIssues.forEach((item) => {
+        issues.push({
+          type: 'spacing-inconsistent',
+          element: item.element,
+          selector: item.selector,
+          description: `Spacing between elements (${item.spacing}px) is less than minimum required (${this.designSpec!.minSpacing}px)`,
+          severity: 'medium',
+          expectedValue: `Minimum ${this.designSpec!.minSpacing}px`,
+          actualValue: `${item.spacing}px`,
+          recommendation: `Increase spacing to meet minimum design requirement of ${this.designSpec!.minSpacing}px`
+        })
+      })
+    }
+
+    // Check for broken images
+    const brokenImages = await page.evaluate(() => {
+      const issues: Array<{
+        selector: string
+        src: string
+      }> = []
+
+      const images = document.querySelectorAll('img')
+      images.forEach((img) => {
+        // Check if image failed to load
+        if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
+          let selector = ''
+          if (img.id) selector = `#${img.id}`
+          else if (img.className) {
+            const className = typeof img.className === 'string' 
+              ? img.className 
+              : (img.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              selector = `.${className.split(' ')[0]}`
+            } else {
+              selector = 'img'
+            }
+          } else selector = 'img'
+
+          issues.push({
+            selector,
+            src: img.src || img.getAttribute('src') || 'unknown'
           })
         }
-        // Navigate back
-        await page.goBack().catch(() => {})
-      } catch (error) {
-        brokenLinks.push({
-          url: link.url,
-          selector: link.selector,
-          status: 0,
+      })
+
+      return issues
+    })
+
+    brokenImages.forEach((item) => {
+      issues.push({
+        type: 'broken-image',
+        element: 'img',
+        selector: item.selector,
+        description: `Broken image detected: ${item.src}`,
+        severity: 'high',
+        recommendation: `Fix image source or add error handling for ${item.selector}`
+      })
+    })
+
+    return issues
+  }
+
+  /**
+   * Check visual consistency (colors, typography, hover/focus states)
+   * Hybrid: Programmatic extraction + optional GPT-4V validation
+   */
+  async checkVisualConsistency(
+    page: Page, 
+    screenshotBase64?: string
+  ): Promise<VisualIssue[]> {
+    const issues: VisualIssue[] = []
+
+    // Helper function to convert RGB to hex
+    const rgbToHex = (rgb: string): string => {
+      if (rgb.startsWith('#')) return rgb.toUpperCase()
+      const match = rgb.match(/\d+/g)
+      if (match && match.length >= 3) {
+        const r = parseInt(match[0])
+        const g = parseInt(match[1])
+        const b = parseInt(match[2])
+        return `#${[r, g, b].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+      }
+      return rgb
+    }
+
+    // Extract and validate colors
+    if (this.designSpec) {
+      const colorIssues = await page.evaluate((spec) => {
+        const issues: Array<{
+          selector: string
+          element: string
+          property: string
+          expected: string
+          actual: string
+        }> = []
+
+        // Helper to convert RGB to hex
+        const rgbToHex = (rgb: string): string => {
+          if (rgb.startsWith('#')) return rgb.toUpperCase()
+          const match = rgb.match(/\d+/g)
+          if (match && match.length >= 3) {
+            const r = parseInt(match[0])
+            const g = parseInt(match[1])
+            const b = parseInt(match[2])
+            return `#${[r, g, b].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+          }
+          return rgb
+        }
+
+        // Check button colors
+        const buttons = document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')
+        buttons.forEach((btn) => {
+          const style = window.getComputedStyle(btn)
+          const bgColor = style.backgroundColor
+          const textColor = style.color
+
+          const btnBgHex = rgbToHex(bgColor)
+          const btnTextHex = rgbToHex(textColor)
+
+          // Check against design spec
+          if (spec.primaryColor && btnBgHex === rgbToHex(spec.primaryColor)) {
+            // Primary button - check text color
+            if (spec.textColor && btnTextHex !== rgbToHex(spec.textColor)) {
+              const getSelector = (el: Element): string => {
+                if (el.id) return `#${el.id}`
+                if (el.className) {
+                  const className = typeof el.className === 'string' 
+                    ? el.className 
+                    : (el.className?.baseVal || '')
+                  if (className && typeof className === 'string') {
+                    return `.${className.split(' ')[0]}`
+                  }
+                }
+                return el.tagName.toLowerCase()
+              }
+
+              issues.push({
+                selector: getSelector(btn),
+                element: btn.tagName.toLowerCase(),
+                property: 'color',
+                expected: spec.textColor,
+                actual: textColor
+              })
+            }
+          }
+
+          // Check component-specific specs
+          if (spec.componentSpecs?.buttons?.primaryColor) {
+            if (btnBgHex !== rgbToHex(spec.componentSpecs.buttons.primaryColor)) {
+              const getSelector = (el: Element): string => {
+                if (el.id) return `#${el.id}`
+                if (el.className) {
+                  const className = typeof el.className === 'string' 
+                    ? el.className 
+                    : (el.className?.baseVal || '')
+                  if (className && typeof className === 'string') {
+                    return `.${className.split(' ')[0]}`
+                  }
+                }
+                return el.tagName.toLowerCase()
+              }
+
+              issues.push({
+                selector: getSelector(btn),
+                element: btn.tagName.toLowerCase(),
+                property: 'background-color',
+                expected: spec.componentSpecs.buttons.primaryColor,
+                actual: bgColor
+              })
+            }
+          }
         })
+
+        return issues
+      }, this.designSpec)
+
+      colorIssues.forEach((item) => {
+        issues.push({
+          type: 'color-inconsistent',
+          element: item.element,
+          selector: item.selector,
+          description: `${item.property} on ${item.selector} doesn't match design spec`,
+          severity: 'high',
+          expectedValue: item.expected,
+          actualValue: item.actual,
+          recommendation: `Update ${item.property} to match design specification: ${item.expected}`
+        })
+      })
+    }
+
+    // Check typography consistency
+    if (this.designSpec) {
+      const typographyIssues = await page.evaluate((spec) => {
+        const issues: Array<{
+          selector: string
+          element: string
+          property: string
+          expected: string
+          actual: string
+        }> = []
+
+        // Check headings
+        const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6')
+        headings.forEach((heading) => {
+          const style = window.getComputedStyle(heading)
+          const fontFamily = style.fontFamily
+          const fontSize = style.fontSize
+
+          if (spec.headingFontFamily && !fontFamily.includes(spec.headingFontFamily.split(',')[0].trim())) {
+            const getSelector = (el: Element): string => {
+              if (el.id) return `#${el.id}`
+              if (el.className) {
+                const className = typeof el.className === 'string' 
+                  ? el.className 
+                  : (el.className?.baseVal || '')
+                if (className && typeof className === 'string') {
+                  return `.${className.split(' ')[0]}`
+                }
+              }
+              return el.tagName.toLowerCase()
+            }
+
+            issues.push({
+              selector: getSelector(heading),
+              element: heading.tagName.toLowerCase(),
+              property: 'font-family',
+              expected: spec.headingFontFamily,
+              actual: fontFamily
+            })
+          }
+
+          if (spec.headingFontSize && fontSize !== spec.headingFontSize) {
+            const getSelector = (el: Element): string => {
+              if (el.id) return `#${el.id}`
+              if (el.className) {
+                const className = typeof el.className === 'string' 
+                  ? el.className 
+                  : (el.className?.baseVal || '')
+                if (className && typeof className === 'string') {
+                  return `.${className.split(' ')[0]}`
+                }
+              }
+              return el.tagName.toLowerCase()
+            }
+
+            issues.push({
+              selector: getSelector(heading),
+              element: heading.tagName.toLowerCase(),
+              property: 'font-size',
+              expected: spec.headingFontSize,
+              actual: fontSize
+            })
+          }
+        })
+
+        // Check body text
+        const bodyText = document.querySelectorAll('p, span, div, li')
+        bodyText.forEach((el) => {
+          const style = window.getComputedStyle(el)
+          const fontFamily = style.fontFamily
+
+          if (spec.primaryFontFamily && !fontFamily.includes(spec.primaryFontFamily.split(',')[0].trim())) {
+            const getSelector = (el: Element): string => {
+              if (el.id) return `#${el.id}`
+              if (el.className) {
+                const className = typeof el.className === 'string' 
+                  ? el.className 
+                  : (el.className?.baseVal || '')
+                if (className && typeof className === 'string') {
+                  return `.${className.split(' ')[0]}`
+                }
+              }
+              return el.tagName.toLowerCase()
+            }
+
+            issues.push({
+              selector: getSelector(el),
+              element: el.tagName.toLowerCase(),
+              property: 'font-family',
+              expected: spec.primaryFontFamily,
+              actual: fontFamily
+            })
+          }
+        })
+
+        return issues
+      }, this.designSpec)
+
+      typographyIssues.forEach((item) => {
+        issues.push({
+          type: 'typography-inconsistent',
+          element: item.element,
+          selector: item.selector,
+          description: `${item.property} on ${item.selector} doesn't match design spec`,
+          severity: 'medium',
+          expectedValue: item.expected,
+          actualValue: item.actual,
+          recommendation: `Update ${item.property} to match design specification: ${item.expected}`
+        })
+      })
+    }
+
+    // Check hover states
+    const hoverIssues = await page.evaluate(() => {
+      const issues: Array<{
+        selector: string
+        element: string
+      }> = []
+
+      const interactiveElements = document.querySelectorAll('button, a, [role="button"], [role="link"]')
+      interactiveElements.forEach((el) => {
+        const style = window.getComputedStyle(el)
+        const cursor = style.cursor
+
+        // Check if element has hover styling (cursor change is a basic indicator)
+        if (cursor === 'default' && el.tagName !== 'A') {
+          const getSelector = (el: Element): string => {
+            if (el.id) return `#${el.id}`
+            if (el.className) {
+              const className = typeof el.className === 'string' 
+                ? el.className 
+                : (el.className?.baseVal || '')
+              if (className && typeof className === 'string') {
+                return `.${className.split(' ')[0]}`
+              }
+            }
+            return el.tagName.toLowerCase()
+          }
+
+          issues.push({
+            selector: getSelector(el),
+            element: el.tagName.toLowerCase()
+          })
+        }
+      })
+
+      return issues
+    })
+
+    // Simulate hover to check for visual changes
+    for (const item of hoverIssues) {
+      try {
+        const beforeStyle = await page.evaluate((selector) => {
+          const el = document.querySelector(selector)
+          if (!el) return null
+          const style = window.getComputedStyle(el)
+          return {
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            borderColor: style.borderColor,
+            opacity: style.opacity
+          }
+        }, item.selector)
+
+        await page.hover(item.selector).catch(() => {})
+        await page.waitForTimeout(100) // Wait for hover transition
+
+        const afterStyle = await page.evaluate((selector) => {
+          const el = document.querySelector(selector)
+          if (!el) return null
+          const style = window.getComputedStyle(el)
+          return {
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            borderColor: style.borderColor,
+            opacity: style.opacity
+          }
+        }, item.selector)
+
+        if (beforeStyle && afterStyle) {
+          const hasChange = 
+            beforeStyle.backgroundColor !== afterStyle.backgroundColor ||
+            beforeStyle.color !== afterStyle.color ||
+            beforeStyle.borderColor !== afterStyle.borderColor ||
+            beforeStyle.opacity !== afterStyle.opacity
+
+          if (!hasChange) {
+            issues.push({
+              type: 'missing-hover-state',
+              element: item.element,
+              selector: item.selector,
+              description: `No visual feedback on hover for ${item.selector}`,
+              severity: 'low',
+              recommendation: `Add hover state styling (color, background, border, or opacity change) to ${item.selector}`
+            })
+          }
+        }
+      } catch (error) {
+        // Element might not be hoverable, skip
       }
     }
 
-    return brokenLinks
+    // Check focus states
+    const focusIssues = await page.evaluate(() => {
+      const issues: Array<{
+        selector: string
+        element: string
+      }> = []
+
+      const focusableElements = document.querySelectorAll(
+        'button, a, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+
+      focusableElements.forEach((el) => {
+        const getSelector = (el: Element): string => {
+          if (el.id) return `#${el.id}`
+          if (el.className) {
+            const className = typeof el.className === 'string' 
+              ? el.className 
+              : (el.className?.baseVal || '')
+            if (className && typeof className === 'string') {
+              return `.${className.split(' ')[0]}`
+            }
+          }
+          return el.tagName.toLowerCase()
+        }
+
+        issues.push({
+          selector: getSelector(el),
+          element: el.tagName.toLowerCase()
+        })
+      })
+
+      return issues
+    })
+
+    // Simulate focus to check for visual changes
+    for (const item of focusIssues) {
+      try {
+        const beforeStyle = await page.evaluate((selector) => {
+          const el = document.querySelector(selector)
+          if (!el) return null
+          const style = window.getComputedStyle(el)
+          return {
+            outline: style.outline,
+            borderColor: style.borderColor,
+            boxShadow: style.boxShadow
+          }
+        }, item.selector)
+
+        await page.focus(item.selector).catch(() => {})
+        await page.waitForTimeout(100)
+
+        const afterStyle = await page.evaluate((selector) => {
+          const el = document.querySelector(selector)
+          if (!el) return null
+          const style = window.getComputedStyle(el)
+          return {
+            outline: style.outline,
+            borderColor: style.borderColor,
+            boxShadow: style.boxShadow
+          }
+        }, item.selector)
+
+        if (beforeStyle && afterStyle) {
+          const hasChange = 
+            beforeStyle.outline !== afterStyle.outline ||
+            beforeStyle.borderColor !== afterStyle.borderColor ||
+            beforeStyle.boxShadow !== afterStyle.boxShadow
+
+          if (!hasChange) {
+            issues.push({
+              type: 'missing-focus-state',
+              element: item.element,
+              selector: item.selector,
+              description: `No visual feedback on focus for ${item.selector}`,
+              severity: 'medium',
+              recommendation: `Add focus state styling (outline, border, or box-shadow) to ${item.selector} for accessibility`
+            })
+          }
+        }
+      } catch (error) {
+        // Element might not be focusable, skip
+      }
+    }
+
+    // Optional: GPT-4V for design consistency validation
+    if (screenshotBase64 && this.visionValidator) {
+      try {
+        const aiIssues = await this.visionValidator.analyzeScreenshot(screenshotBase64, {
+          url: page.url(),
+          goal: `Validate visual consistency against design spec. Check: color palette (primary: ${this.designSpec?.primaryColor || 'N/A'}), typography (font: ${this.designSpec?.primaryFontFamily || 'N/A'}), overall design coherence`
+        })
+
+        aiIssues.forEach((aiIssue) => {
+          issues.push({
+            type: 'color-inconsistent', // Default type, AI can identify various issues
+            description: aiIssue.description,
+            severity: aiIssue.severity,
+            recommendation: aiIssue.suggestion
+          })
+        })
+      } catch (error: any) {
+        console.warn('Vision validator error during visual consistency check:', error.message)
+      }
+    }
+
+    return issues
+  }
+
+  /**
+   * Check error messages (placement and clarity)
+   * Hybrid: Programmatic detection + optional GPT-4V for clarity
+   */
+  async checkErrorMessages(
+    page: Page,
+    screenshotBase64?: string
+  ): Promise<VisualIssue[]> {
+    const issues: VisualIssue[] = []
+
+    // Detect error messages programmatically
+    const errorMessages = await page.evaluate(() => {
+      const errors: Array<{
+        selector: string
+        text: string
+        fieldSelector?: string
+        placement: 'near-field' | 'distant' | 'unknown'
+      }> = []
+
+      // Find error messages via common patterns
+      const errorSelectors = [
+        '[aria-invalid="true"]',
+        '.error',
+        '.invalid',
+        '[class*="error"]',
+        '[class*="invalid"]',
+        '[id*="error"]',
+        '[role="alert"]',
+        '[aria-live="polite"]',
+        '[aria-live="assertive"]'
+      ]
+
+      errorSelectors.forEach((selector) => {
+        const elements = document.querySelectorAll(selector)
+        elements.forEach((el) => {
+          const text = el.textContent?.trim() || ''
+          if (text.length === 0) return
+
+          // Try to find associated form field
+          let fieldSelector: string | undefined
+          let placement: 'near-field' | 'distant' | 'unknown' = 'unknown'
+
+          // Check if error is inside a form field's parent
+          const formField = el.closest('form')?.querySelector('input, select, textarea')
+          if (formField) {
+            const getSelector = (el: Element): string => {
+              if (el.id) return `#${el.id}`
+              if (el.className) {
+                const className = typeof el.className === 'string' 
+                  ? el.className 
+                  : (el.className?.baseVal || '')
+                if (className && typeof className === 'string') {
+                  return `.${className.split(' ')[0]}`
+                }
+              }
+              return el.tagName.toLowerCase()
+            }
+            fieldSelector = getSelector(formField)
+
+            // Check proximity (error should be near field)
+            const errorRect = el.getBoundingClientRect()
+            const fieldRect = formField.getBoundingClientRect()
+            const distance = Math.abs(errorRect.top - fieldRect.bottom)
+            placement = distance < 50 ? 'near-field' : 'distant'
+          }
+
+          const getSelector = (el: Element): string => {
+            if (el.id) return `#${el.id}`
+            if (el.className) {
+              const className = typeof el.className === 'string' 
+                ? el.className 
+                : (el.className?.baseVal || '')
+              if (className && typeof className === 'string') {
+                return `.${className.split(' ')[0]}`
+              }
+            }
+            return el.tagName.toLowerCase()
+          }
+
+          errors.push({
+            selector: getSelector(el),
+            text,
+            fieldSelector,
+            placement
+          })
+        })
+      })
+
+      return errors
+    })
+
+    // Check error message placement
+    errorMessages.forEach((error) => {
+      if (error.placement === 'distant') {
+        issues.push({
+          type: 'error-message-placement',
+          element: 'error-message',
+          selector: error.selector,
+          description: `Error message is too far from associated field (${error.fieldSelector || 'unknown'})`,
+          severity: 'medium',
+          expectedValue: 'Error message within 50px of field',
+          actualValue: 'Error message placed far from field',
+          recommendation: `Move error message closer to ${error.fieldSelector || 'the form field'} for better UX`
+        })
+      }
+    })
+
+    // Optional: GPT-4V for error message clarity/grammar
+    if (screenshotBase64 && this.visionValidator && errorMessages.length > 0) {
+      try {
+        const errorTexts = errorMessages.map(e => e.text).join('\n')
+        const aiIssues = await this.visionValidator.analyzeScreenshot(screenshotBase64, {
+          url: page.url(),
+          goal: `Analyze error messages for clarity and grammar. Error messages found: ${errorTexts}. Check if messages are user-friendly, grammatically correct, and provide actionable guidance.`
+        })
+
+        aiIssues.forEach((aiIssue) => {
+          // Only add if it's related to error message clarity
+          if (aiIssue.description.toLowerCase().includes('error') || 
+              aiIssue.description.toLowerCase().includes('message') ||
+              aiIssue.description.toLowerCase().includes('grammar') ||
+              aiIssue.description.toLowerCase().includes('clarity')) {
+            issues.push({
+              type: 'error-message-clarity',
+              description: aiIssue.description,
+              severity: aiIssue.severity,
+              recommendation: aiIssue.suggestion
+            })
+          }
+        })
+      } catch (error: any) {
+        console.warn('Vision validator error during error message check:', error.message)
+      }
+    }
+
+    return issues
   }
 
   /**
@@ -509,8 +1387,15 @@ export class ComprehensiveTestingService {
           if (scrollWidth > clientWidth) {
             let selector = ''
             if (el.id) selector = `#${el.id}`
-            else if (el.className) selector = `.${el.className.split(' ')[0]}`
-            else selector = el.tagName.toLowerCase()
+            else if (el.className) {
+              // Handle SVG elements (className can be SVGAnimatedString) and null cases
+              const className = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')
+              if (className && typeof className === 'string') {
+                selector = `.${className.split(' ')[0]}`
+              } else {
+                selector = el.tagName.toLowerCase()
+              }
+            } else selector = el.tagName.toLowerCase()
             
             issues.push({
               selector,
@@ -533,6 +1418,27 @@ export class ComprehensiveTestingService {
       })
     })
 
+    // NEW: Add layout and alignment checks
+    const layoutIssues = await this.checkLayoutAndAlignment(page)
+    issues.push(...layoutIssues)
+
+    // NEW: Add visual consistency checks
+    // Capture screenshot if not provided
+    let screenshotBase64: string | undefined = previousScreenshot
+    if (!screenshotBase64) {
+      try {
+        screenshotBase64 = await page.screenshot({ encoding: 'base64' }) as string
+      } catch (error) {
+        console.warn('Failed to capture screenshot for visual consistency check:', error)
+      }
+    }
+    const consistencyIssues = await this.checkVisualConsistency(page, screenshotBase64)
+    issues.push(...consistencyIssues)
+
+    // NEW: Add error message checks
+    const errorIssues = await this.checkErrorMessages(page, screenshotBase64)
+    issues.push(...errorIssues)
+
     this.visualIssues = issues
     return issues
   }
@@ -550,14 +1456,12 @@ export class ComprehensiveTestingService {
       accessibility: this.accessibilityIssues,
       visualIssues: this.visualIssues,
       domHealth: this.domHealthData || {
-        brokenLinks: [],
         missingAltText: [],
         missingLabels: [],
         orphanedElements: [],
         hiddenElements: [],
         jsErrors: [],
       },
-      brokenLinks: this.domHealthData?.brokenLinks || [],
     }
   }
 

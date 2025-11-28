@@ -1,6 +1,24 @@
 // Playwright runner using real Playwright API
 import { chromium, firefox, webkit, Browser, Page, BrowserContext } from 'playwright'
-import { TestProfile, LLMAction, DeviceProfile } from '../types'
+import { TestProfile, LLMAction, DeviceProfile, ActionExecutionResult, SelfHealingInfo } from '../types'
+import { validateUrlOrThrow } from '../utils/urlValidator'
+
+/**
+ * Device alias mapping for responsive testing
+ * Maps friendly device names to viewport dimensions
+ */
+export const DEVICE_ALIASES: Record<string, { width: number; height: number }> = {
+  'mobile': { width: 390, height: 844 },           // iPhone 12/13 standard
+  'mobile-small': { width: 360, height: 640 },    // Android small devices
+  'mobile-large': { width: 428, height: 926 },    // iPhone 14 Pro Max
+  'tablet': { width: 768, height: 1024 },        // iPad portrait
+  'tablet-landscape': { width: 1024, height: 768 }, // iPad landscape
+  'tablet-small': { width: 640, height: 960 },    // Small tablet
+  'desktop': { width: 1920, height: 1080 },      // Standard desktop
+  'desktop-small': { width: 1280, height: 720 },  // Small desktop/laptop
+  'desktop-large': { width: 2560, height: 1440 }, // Large desktop
+  'ultrawide': { width: 3440, height: 1440 },     // Ultrawide monitor
+}
 
 export interface RunnerSession {
   id: string
@@ -10,6 +28,13 @@ export interface RunnerSession {
   context: BrowserContext
   page: Page
   videoPath?: string // Path to video file
+  tracingStarted?: boolean // Track if tracing was successfully started
+}
+
+interface HealingCandidate {
+  selector: string
+  strategy: SelfHealingInfo['strategy']
+  note: string
 }
 
 export class PlaywrightRunner {
@@ -43,7 +68,7 @@ export class PlaywrightRunner {
       headless: true,
     })
     
-    // Create browser context with viewport settings and video recording
+    // Create browser context with viewport settings, video recording, and trace
     const contextOptions: any = {
       viewport: profile.viewport || { width: 1280, height: 720 },
       recordVideo: {
@@ -53,7 +78,87 @@ export class PlaywrightRunner {
     }
     
     const context = await browser.newContext(contextOptions)
+    
+    // Start trace recording (Time-Travel Debugger feature)
+    // This records all actions, network requests, console logs, and DOM snapshots
+    let tracingStarted = false
+    try {
+      await context.tracing.start({
+        screenshots: true,
+        snapshots: true,
+        sources: true,
+      })
+      tracingStarted = true
+      console.log('Playwright: Tracing started successfully')
+    } catch (traceStartError: any) {
+      console.error('Playwright: Failed to start tracing:', traceStartError.message)
+      // Continue without tracing - don't fail session creation
+      // Tracing is optional for test execution
+    }
+    
     const page = await context.newPage()
+    
+    // SECURITY: Network-layer request interception to prevent SSRF via redirects/DNS rebinding
+    // This catches attacks that bypass initial URL validation:
+    // 1. HTTP redirects (301/302) to localhost/private IPs
+    // 2. DNS rebinding (DNS changes after validation)
+    // 3. JavaScript-initiated requests to internal endpoints
+    await page.route('**/*', async (route) => {
+      const request = route.request()
+      const requestUrl = request.url()
+      const resourceType = request.resourceType()
+      
+      try {
+        // Re-validate EVERY request at network layer (not just initial navigation)
+        const { safe, reason } = await import('../utils/urlValidator').then(m => m.isUrlSafe(requestUrl))
+        
+        if (!safe) {
+          console.warn(`[SECURITY] Blocked dangerous request to: ${requestUrl}`)
+          console.warn(`[SECURITY] Reason: ${reason}`)
+          console.warn(`[SECURITY] Type: ${resourceType}, Method: ${request.method()}`)
+          
+          // Abort the request to prevent SSRF
+          await route.abort('blockedbyclient')
+          return
+        }
+        
+        // OPTIMIZATION: Block unnecessary resources to speed up tests (optional)
+        // This reduces bandwidth and improves test performance
+        const { config } = await import('../config/env')
+        if (config.worker.blockUnnecessaryResources) {
+          const blockList = [
+            'image',      // Images (screenshots capture these anyway)
+            'font',       // Web fonts
+            'media',      // Audio/video
+            'stylesheet', // CSS (we're testing functionality, not styling)
+          ]
+          
+          // Block analytics and ads by domain pattern
+          const adDomains = [
+            'google-analytics.com',
+            'googletagmanager.com',
+            'facebook.com/tr',
+            'doubleclick.net',
+            'hotjar.com',
+            'mixpanel.com',
+            'segment.com',
+            'amplitude.com',
+          ]
+          
+          if (blockList.includes(resourceType) || adDomains.some(domain => requestUrl.includes(domain))) {
+            await route.abort('blockedbyclient')
+            return
+          }
+        }
+        
+        // Allow safe requests to continue
+        await route.continue()
+      } catch (error: any) {
+        console.error(`[SECURITY] Error validating request to ${requestUrl}:`, error.message)
+        // Fail closed - block on validation errors
+        await route.abort('failed')
+      }
+    })
     
     // Note: Video path will be available after context closes
     // We'll store the session ID to retrieve it later
@@ -65,11 +170,13 @@ export class PlaywrightRunner {
       browser,
       context,
       page,
+      tracingStarted,
     }
     
     this.sessions.set(sessionId, session)
     
     console.log('Playwright: Session reserved:', sessionId, 'Browser:', profile.device)
+    console.log('Playwright: Network-layer SSRF protection enabled for session:', sessionId)
     
     return session
   }
@@ -78,20 +185,20 @@ export class PlaywrightRunner {
    * Capture screenshot
    * Uses real Playwright API to capture screenshot
    */
-  async captureScreenshot(sessionId: string): Promise<string> {
+  async captureScreenshot(sessionId: string, fullPage: boolean = false): Promise<string> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       throw new Error(`Session ${sessionId} not found`)
     }
     
-    console.log('Playwright: Capturing screenshot for session:', sessionId)
+    console.log('Playwright: Capturing screenshot for session:', sessionId, fullPage ? '(full page)' : '(viewport)')
     
     try {
       // Capture screenshot as base64
       const screenshot = await session.page.screenshot({
         type: 'png',
         encoding: 'base64',
-        fullPage: false, // Capture viewport only
+        fullPage: fullPage,
       })
       
       return screenshot as string
@@ -102,10 +209,69 @@ export class PlaywrightRunner {
   }
 
   /**
+   * Get page dimensions (viewport and document height)
+   */
+  async getPageDimensions(sessionId: string): Promise<{ viewportHeight: number; documentHeight: number }> {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+    
+    try {
+      const dimensions = await session.page.evaluate(() => {
+        return {
+          viewportHeight: window.innerHeight,
+          documentHeight: Math.max(
+            document.body.scrollHeight,
+            document.body.offsetHeight,
+            document.documentElement.clientHeight,
+            document.documentElement.scrollHeight,
+            document.documentElement.offsetHeight
+          ),
+        }
+      })
+      
+      return dimensions
+    } catch (error: any) {
+      console.error('Playwright: Failed to get page dimensions:', error.message)
+      throw new Error(`Failed to get page dimensions: ${error.message}`)
+    }
+  }
+
+  /**
+   * Scroll to a specific position on the page
+   */
+  async scrollToPosition(sessionId: string, y: number): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+    
+    try {
+      await session.page.evaluate((scrollY) => {
+        window.scrollTo(0, scrollY)
+      }, y)
+      
+      // Wait for scroll to complete and any lazy-loaded content
+      await session.page.waitForTimeout(500)
+    } catch (error: any) {
+      console.error('Playwright: Failed to scroll to position:', error.message)
+      throw new Error(`Failed to scroll to position: ${error.message}`)
+    }
+  }
+
+  /**
+   * Scroll to top of page
+   */
+  async scrollToTop(sessionId: string): Promise<void> {
+    await this.scrollToPosition(sessionId, 0)
+  }
+
+  /**
    * Execute action
    * Uses real Playwright API to execute actions
    */
-  async executeAction(sessionId: string, action: LLMAction): Promise<void> {
+  async executeAction(sessionId: string, action: LLMAction): Promise<ActionExecutionResult | void> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       throw new Error(`Session ${sessionId} not found`)
@@ -116,101 +282,39 @@ export class PlaywrightRunner {
     const { page } = session
     
     try {
+      let healingMeta: SelfHealingInfo | null = null
       switch (action.action) {
         case 'click':
           if (!action.selector) {
             throw new Error('Selector required for click action')
           }
+          
+          // Check for and dismiss popups/cookie banners before clicking
+          await this.resolveBlockingOverlays(page)
+          
           console.log('Playwright: Clicking element:', action.selector)
           
           try {
-            // Use Playwright's locator API which supports all selector types (CSS, text, role, etc.)
-            const locator = page.locator(action.selector)
-            
-            // Wait for element to be attached to DOM
-            await locator.waitFor({ state: 'attached', timeout: 10000 }).catch(() => {
-              throw new Error(`Element ${action.selector} not found in DOM`)
-            })
-            
-            // Check if element is visible using Playwright's built-in method
-            const isVisible = await locator.isVisible().catch(() => false)
-            if (!isVisible) {
-              // Try to scroll into view first
+            healingMeta = await this.tryClick(page, action)
+          } catch (clickError: any) {
+            // If click fails, try dismissing popups again and retry once
+            const popupDismissed = await this.resolveBlockingOverlays(page)
+            if (popupDismissed) {
               try {
-                await locator.scrollIntoViewIfNeeded({ timeout: 5000 })
-                await page.waitForTimeout(300) // Brief wait after scroll
-                
-                // Check visibility again after scroll
-                const isVisibleAfterScroll = await locator.isVisible().catch(() => false)
-                if (!isVisibleAfterScroll) {
-                  const errorMsg = `Element ${action.selector} is not visible (may be hidden or have display:none)`
-                  const { formatErrorForStep } = await import('../utils/errorFormatter')
-                  throw new Error(formatErrorForStep(new Error(errorMsg), { action: action.action, selector: action.selector }))
-                }
-              } catch (scrollError: any) {
-                const errorMsg = `Element ${action.selector} is not visible (may be hidden or have display:none)`
+                await page.waitForTimeout(500)
+                healingMeta = await this.tryClick(page, action)
+              } catch (retryError: any) {
+                await this.logElementDebugInfo(page, action.selector)
                 const { formatErrorForStep } = await import('../utils/errorFormatter')
-                throw new Error(formatErrorForStep(new Error(errorMsg), { action: action.action, selector: action.selector }))
+                const formattedError = formatErrorForStep(retryError, { action: action.action, selector: action.selector })
+                throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
               }
-            }
-            
-            // Wait for element to be actionable (visible and enabled)
-            await locator.waitFor({ state: 'visible', timeout: 10000 })
-            
-            // Click the element using Playwright's locator (handles all selector types)
-            const beforeUrl = page.url()
-            await locator.click({ timeout: 10000, force: false })
-            
-            // Wait for navigation or network idle after click
-            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-            
-            // Check if URL changed (for link clicks - verify redirect)
-            const afterUrl = page.url()
-            if (beforeUrl !== afterUrl) {
-              console.log(`Playwright: Link redirect verified: ${beforeUrl} -> ${afterUrl}`)
             } else {
-              // Check if it's a link that should have redirected using locator
-              try {
-                const tagName = await locator.evaluate((el) => el.tagName.toLowerCase()).catch(() => null)
-                if (tagName === 'a') {
-                  const href = await locator.evaluate((el: HTMLAnchorElement) => el.href).catch(() => null)
-                  if (href && !href.startsWith('#')) {
-                    console.log(`Playwright: Link clicked but URL didn't change. Expected redirect to: ${href}`)
-                  }
-                }
-              } catch (e) {
-                // Ignore errors when checking link info
-              }
+              await this.logElementDebugInfo(page, action.selector)
+              const { formatErrorForStep } = await import('../utils/errorFormatter')
+              const formattedError = formatErrorForStep(clickError, { action: action.action, selector: action.selector })
+              throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
             }
-          } catch (error: any) {
-            // If click fails, try to get more info about the element using locator
-            try {
-              const locator = page.locator(action.selector)
-              const elementInfo = {
-                exists: await locator.count().then(count => count > 0).catch(() => false),
-                visible: await locator.isVisible().catch(() => false),
-                enabled: await locator.isEnabled().catch(() => false),
-              }
-              
-              if (elementInfo.exists) {
-                const details = await locator.first().evaluate((el) => ({
-                  tagName: el.tagName,
-                  text: el.textContent?.trim().substring(0, 50),
-                  classes: el.className,
-                  id: el.id,
-                })).catch(() => ({}))
-                
-                console.error('Playwright: Click failed. Element info:', JSON.stringify({ ...elementInfo, ...details }))
-              } else {
-                console.error('Playwright: Click failed. Element not found:', action.selector)
-              }
-            } catch (infoError: any) {
-              console.error('Playwright: Could not get element info:', infoError.message)
-            }
-            
-            const { formatErrorForStep } = await import('../utils/errorFormatter')
-            const formattedError = formatErrorForStep(error, { action: action.action, selector: action.selector })
-            throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
           }
           break
           
@@ -218,6 +322,10 @@ export class PlaywrightRunner {
           if (!action.selector || !action.value) {
             throw new Error('Selector and value required for type action')
           }
+          
+          // Check for and dismiss popups/cookie banners before typing
+          await this.resolveBlockingOverlays(page)
+          
           console.log('Playwright: Typing into element:', action.selector, 'value:', action.value)
           
           try {
@@ -226,9 +334,24 @@ export class PlaywrightRunner {
             await locator.waitFor({ state: 'visible', timeout: 10000 })
             await locator.fill(action.value, { timeout: 10000 })
           } catch (error: any) {
-            const { formatErrorForStep } = await import('../utils/errorFormatter')
-            const formattedError = formatErrorForStep(error, { action: action.action, selector: action.selector })
-            throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
+            // If type fails, try dismissing popups again and retry once
+            const popupDismissed = await this.resolveBlockingOverlays(page)
+            if (popupDismissed) {
+              try {
+                await page.waitForTimeout(500)
+                const locator = page.locator(action.selector)
+                await locator.waitFor({ state: 'visible', timeout: 10000 })
+                await locator.fill(action.value, { timeout: 10000 })
+              } catch (retryError: any) {
+                const { formatErrorForStep } = await import('../utils/errorFormatter')
+                const formattedError = formatErrorForStep(retryError, { action: action.action, selector: action.selector })
+                throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
+              }
+            } else {
+              const { formatErrorForStep } = await import('../utils/errorFormatter')
+              const formattedError = formatErrorForStep(error, { action: action.action, selector: action.selector })
+              throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
+            }
           }
           break
           
@@ -244,8 +367,24 @@ export class PlaywrightRunner {
           if (!action.value) {
             throw new Error('URL required for navigate action')
           }
+          
+          // SECURITY: Validate URL to prevent SSRF attacks
+          // Block localhost, private IPs, and cloud metadata endpoints
+          validateUrlOrThrow(action.value)
+          
           console.log('Playwright: Navigating to:', action.value)
           await page.goto(action.value, { waitUntil: 'networkidle', timeout: 30000 })
+          
+          // Wait for page to fully load and any popups to appear
+          await page.waitForTimeout(2000)
+          
+          // Check for and dismiss popups/cookie banners after navigation
+          const hasOverlay = await this.resolveBlockingOverlays(page)
+          if (hasOverlay) {
+            console.log('Playwright: Dismissed popup/cookie banner after navigation')
+            // Wait a bit more after dismissing to ensure page is ready
+            await page.waitForTimeout(1000)
+          }
           break
           
         case 'wait':
@@ -254,58 +393,170 @@ export class PlaywrightRunner {
           break
           
         case 'assert':
-          // For assert actions, check if element exists, is visible (or hidden as expected), and has correct values
+          // Enhanced assert action with multiple assertion types
           if (!action.selector) {
             throw new Error('Selector required for assert action')
           }
           
-          console.log('Playwright: Asserting element:', action.selector)
+          // Parse assertion type and expected value from action.value
+          // Format: "type:expected" or just "type"
+          const assertionParts = action.value?.split(':') || []
+          const assertionType = assertionParts[0] || 'exists'
+          const expectedValue = assertionParts.slice(1).join(':') || null
+          
+          console.log(`Playwright: Asserting ${assertionType} for element:`, action.selector, expectedValue ? `(expected: ${expectedValue})` : '')
           
           try {
-            // Use locator API for better selector support
             const locator = page.locator(action.selector)
-            
-            // Wait for element to exist in DOM
             await locator.waitFor({ state: 'attached', timeout: 10000 })
             
-            // Get element information using locator
-            const elementInfo = await locator.first().evaluate((el) => {
-              const rect = el.getBoundingClientRect()
-              const style = window.getComputedStyle(el)
-              const tagName = el.tagName.toLowerCase()
-              
-              let value: string | null = null
-              if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
-                value = (el as HTMLInputElement).value || null
-              } else {
-                value = el.textContent?.trim() || null
-              }
-              
-              return {
-                exists: true,
-                tagName,
-                value,
-                type: (el as HTMLInputElement).type || null,
-                name: (el as HTMLInputElement).name || null,
-                id: el.id || null,
-                isVisible: style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0',
-                isHidden: (el as HTMLInputElement).type === 'hidden' || el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true',
-                display: style.display,
-                visibility: style.visibility,
-                opacity: style.opacity,
-                href: (el as HTMLAnchorElement).href || null,
-              }
-            }).catch(() => ({ exists: false }))
-            
-            if (!elementInfo.exists) {
-              throw new Error(`Element ${action.selector} does not exist in DOM`)
-            }
-            
-            console.log('Playwright: Assertion passed - element info:', JSON.stringify(elementInfo, null, 2))
-            
-            // If it's a hidden element, that's expected - log it
-            if (elementInfo.isHidden) {
-              console.log(`Playwright: Hidden element verified: ${action.selector} (type: ${elementInfo.type}, value: ${elementInfo.value || 'none'})`)
+            switch (assertionType) {
+              case 'exists':
+                // Verify element exists (already done by waitFor above)
+                const exists = await locator.count() > 0
+                if (!exists) {
+                  throw new Error(`Element ${action.selector} does not exist in DOM`)
+                }
+                console.log('Playwright: Assertion passed - element exists')
+                break
+                
+              case 'visible':
+                const isVisible = await locator.first().isVisible()
+                if (!isVisible) {
+                  throw new Error(`Element ${action.selector} is not visible`)
+                }
+                console.log('Playwright: Assertion passed - element is visible')
+                break
+                
+              case 'value':
+                if (!expectedValue) {
+                  throw new Error('Expected value required for value assertion')
+                }
+                const actualValue = await locator.first().evaluate((el: any) => {
+                  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+                    return el.value || ''
+                  }
+                  return el.textContent?.trim() || ''
+                })
+                if (actualValue !== expectedValue) {
+                  throw new Error(`Value assertion failed: expected "${expectedValue}", got "${actualValue}"`)
+                }
+                console.log(`Playwright: Assertion passed - value matches: "${expectedValue}"`)
+                break
+                
+              case 'error':
+                // Look for error messages - check for common error patterns
+                const errorFound = await page.evaluate((selector) => {
+                  const el = document.querySelector(selector)
+                  if (!el) return false
+                  
+                  // Check if element itself contains error text
+                  const text = el.textContent?.toLowerCase() || ''
+                  const hasErrorKeywords = text.includes('error') || 
+                                          text.includes('invalid') || 
+                                          text.includes('required') ||
+                                          text.includes('incorrect') ||
+                                          text.includes('failed')
+                  
+                  // Check for error classes
+                  const hasErrorClass = el.classList.toString().toLowerCase().includes('error') ||
+                                      el.classList.toString().toLowerCase().includes('invalid')
+                  
+                  // Check aria-invalid
+                  const ariaInvalid = el.getAttribute('aria-invalid') === 'true'
+                  
+                  // Check for nearby error messages (common pattern: error message after input)
+                  const parent = el.parentElement
+                  if (parent) {
+                    const siblings = Array.from(parent.children)
+                    const errorSibling = siblings.find(sib => {
+                      const sibText = sib.textContent?.toLowerCase() || ''
+                      const sibClass = sib.classList.toString().toLowerCase()
+                      return (sibText.includes('error') || sibText.includes('invalid') || sibText.includes('required')) ||
+                             (sibClass.includes('error') || sibClass.includes('invalid'))
+                    })
+                    if (errorSibling) return true
+                  }
+                  
+                  return hasErrorKeywords || hasErrorClass || ariaInvalid
+                }, action.selector)
+                
+                if (!errorFound) {
+                  throw new Error(`Error assertion failed: No error message found for ${action.selector}`)
+                }
+                console.log('Playwright: Assertion passed - error message detected')
+                break
+                
+              case 'state':
+                if (!expectedValue) {
+                  throw new Error('Expected state required (e.g., "checked" or "unchecked")')
+                }
+                const actualState = await locator.first().evaluate((el: any) => {
+                  if (el.type === 'checkbox' || el.type === 'radio') {
+                    return el.checked ? 'checked' : 'unchecked'
+                  }
+                  return null
+                })
+                if (actualState !== expectedValue) {
+                  throw new Error(`State assertion failed: expected "${expectedValue}", got "${actualState}"`)
+                }
+                console.log(`Playwright: Assertion passed - state is "${expectedValue}"`)
+                break
+                
+              case 'selected':
+                if (!expectedValue) {
+                  throw new Error('Expected option value required for selected assertion')
+                }
+                const selectedValue = await locator.first().evaluate((el: any) => {
+                  if (el.tagName === 'SELECT') {
+                    return el.options[el.selectedIndex]?.value || el.options[el.selectedIndex]?.text || ''
+                  }
+                  return null
+                })
+                if (selectedValue !== expectedValue && !selectedValue?.includes(expectedValue)) {
+                  throw new Error(`Selected assertion failed: expected "${expectedValue}", got "${selectedValue}"`)
+                }
+                console.log(`Playwright: Assertion passed - option "${expectedValue}" is selected`)
+                break
+                
+              case 'text':
+                if (!expectedValue) {
+                  throw new Error('Expected text required for text assertion')
+                }
+                const elementText = await locator.first().textContent() || ''
+                if (!elementText.toLowerCase().includes(expectedValue.toLowerCase())) {
+                  throw new Error(`Text assertion failed: expected to find "${expectedValue}", got "${elementText}"`)
+                }
+                console.log(`Playwright: Assertion passed - text contains "${expectedValue}"`)
+                break
+                
+              default:
+                // Fallback to basic existence check
+                const elementInfo = await locator.first().evaluate((el) => {
+                  const rect = el.getBoundingClientRect()
+                  const style = window.getComputedStyle(el)
+                  const tagName = el.tagName.toLowerCase()
+                  
+                  let value: string | null = null
+                  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+                    value = (el as HTMLInputElement).value || null
+                  } else {
+                    value = el.textContent?.trim() || null
+                  }
+                  
+                  return {
+                    exists: true,
+                    tagName,
+                    value,
+                    type: (el as HTMLInputElement).type || null,
+                    isVisible: style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0',
+                  }
+                }).catch(() => ({ exists: false }))
+                
+                if (!elementInfo.exists) {
+                  throw new Error(`Element ${action.selector} does not exist in DOM`)
+                }
+                console.log('Playwright: Assertion passed - element info:', JSON.stringify(elementInfo, null, 2))
             }
             
           } catch (error: any) {
@@ -316,9 +567,105 @@ export class PlaywrightRunner {
           }
           break
           
+        case 'setViewport':
+          // Set viewport to specific dimensions
+          // Value format: "widthxheight" (e.g., "390x844")
+          if (!action.value) {
+            throw new Error('Viewport dimensions required for setViewport action (format: "widthxheight")')
+          }
+          
+          const viewportMatch = action.value.match(/(\d+)x(\d+)/)
+          if (!viewportMatch) {
+            throw new Error(`Invalid viewport format: ${action.value}. Expected format: "widthxheight" (e.g., "390x844")`)
+          }
+          
+          const width = parseInt(viewportMatch[1], 10)
+          const height = parseInt(viewportMatch[2], 10)
+          
+          if (width <= 0 || height <= 0 || width > 10000 || height > 10000) {
+            throw new Error(`Invalid viewport dimensions: ${width}x${height}. Dimensions must be between 1 and 10000`)
+          }
+          
+          console.log(`Playwright: Setting viewport to ${width}x${height}`)
+          await page.setViewportSize({ width, height })
+          
+          // Wait for layout to stabilize after viewport change
+          await page.waitForLoadState('networkidle')
+          await page.waitForTimeout(500) // Additional wait for CSS transitions
+          break
+          
+        case 'setDevice':
+          // Set viewport using device alias (e.g., "mobile", "tablet", "desktop")
+          if (!action.value) {
+            throw new Error('Device alias required for setDevice action (e.g., "mobile", "tablet", "desktop")')
+          }
+          
+          const deviceAlias = action.value.toLowerCase().trim()
+          const deviceDimensions = DEVICE_ALIASES[deviceAlias]
+          
+          if (!deviceDimensions) {
+            const availableAliases = Object.keys(DEVICE_ALIASES).join(', ')
+            throw new Error(`Unknown device alias: "${deviceAlias}". Available aliases: ${availableAliases}`)
+          }
+          
+          console.log(`Playwright: Setting device to ${deviceAlias} (${deviceDimensions.width}x${deviceDimensions.height})`)
+          await page.setViewportSize(deviceDimensions)
+          
+          // Wait for layout to stabilize after viewport change
+          await page.waitForLoadState('networkidle')
+          await page.waitForTimeout(500) // Additional wait for CSS transitions
+          break
+          
+        case 'setOrientation':
+          // Change orientation by swapping width and height
+          // Value should be "portrait" or "landscape"
+          if (!action.value) {
+            throw new Error('Orientation required for setOrientation action ("portrait" or "landscape")')
+          }
+          
+          const orientation = action.value.toLowerCase().trim()
+          if (orientation !== 'portrait' && orientation !== 'landscape') {
+            throw new Error(`Invalid orientation: "${orientation}". Must be "portrait" or "landscape"`)
+          }
+          
+          // Get current viewport size
+          const currentViewport = page.viewportSize()
+          if (!currentViewport) {
+            throw new Error('Cannot change orientation: viewport size not available')
+          }
+          
+          const currentWidth = currentViewport.width
+          const currentHeight = currentViewport.height
+          
+          // Determine if we need to swap dimensions
+          const isCurrentlyPortrait = currentHeight > currentWidth
+          const shouldBePortrait = orientation === 'portrait'
+          
+          let newWidth = currentWidth
+          let newHeight = currentHeight
+          
+          // Swap dimensions if orientation change is needed
+          if (isCurrentlyPortrait !== shouldBePortrait) {
+            newWidth = currentHeight
+            newHeight = currentWidth
+          }
+          
+          console.log(`Playwright: Setting orientation to ${orientation} (${newWidth}x${newHeight})`)
+          await page.setViewportSize({ width: newWidth, height: newHeight })
+          
+          // Wait for layout to stabilize after orientation change
+          await page.waitForLoadState('networkidle')
+          await page.waitForTimeout(500) // Additional wait for CSS transitions
+          break
+          
         default:
           console.warn('Playwright: Unknown action:', action.action)
       }
+
+      if (healingMeta) {
+        return { healing: healingMeta }
+      }
+      return
     } catch (error: any) {
       console.error('Playwright: Action execution failed:', error.message)
       const { formatErrorForStep } = await import('../utils/errorFormatter')
@@ -344,6 +691,561 @@ export class PlaywrightRunner {
    */
   getSession(sessionId: string): RunnerSession | undefined {
     return this.sessions.get(sessionId)
+  }
+
+  /**
+   * Check for and dismiss blocking overlays (popups, modals)
+   * Called proactively before each action to prevent popups from blocking tests
+   */
+  async checkAndDismissOverlays(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.page) {
+      return false
+    }
+
+    try {
+      return await this.resolveBlockingOverlays(session.page)
+    } catch (error: any) {
+      console.warn(`Playwright: Error checking overlays: ${error.message}`)
+      return false
+    }
+  }
+
+  private async tryClick(page: Page, action: LLMAction): Promise<SelfHealingInfo | null> {
+    if (!action.selector) {
+      throw new Error('Selector required for click action')
+    }
+    try {
+      await this.performClick(page, action.selector)
+      return null
+    } catch (primaryError: any) {
+      const healing = await this.applyClickSelfHealing(page, action)
+      if (healing) {
+        return healing
+      }
+      throw primaryError
+    }
+  }
+
+  private async performClick(page: Page, selector: string, options: { fromHealing?: boolean } = {}): Promise<void> {
+    const locator = page.locator(selector)
+    
+    await locator.waitFor({ state: 'attached', timeout: 10000 }).catch(() => {
+      throw new Error(`Element ${selector} not found in DOM`)
+    })
+    
+    const ensureVisible = async () => {
+      const visible = await locator.isVisible().catch(() => false)
+      if (visible) return
+      
+      // Try to scroll element into view
+      try {
+        await locator.scrollIntoViewIfNeeded({ timeout: 5000 })
+        await page.waitForTimeout(500) // Wait a bit longer for animations
+      } catch (scrollError) {
+        // If scroll fails, try manual scroll
+        try {
+          const box = await locator.boundingBox()
+          if (box) {
+            await page.evaluate(({ x, y, width, height }) => {
+              window.scrollTo({
+                left: x + width / 2,
+                top: y + height / 2,
+                behavior: 'smooth'
+              })
+            }, box)
+            await page.waitForTimeout(500)
+          }
+        } catch (manualScrollError) {
+          // Ignore manual scroll errors
+        }
+      }
+      
+      // Check visibility again after scroll
+      const visibleAfterScroll = await locator.isVisible().catch(() => false)
+      if (!visibleAfterScroll) {
+        // Get element info for better error message
+        const elementInfo = await page.evaluate((sel) => {
+          const el = document.querySelector(sel)
+          if (!el) return { exists: false, visible: false, enabled: false }
+          const style = window.getComputedStyle(el)
+          const rect = el.getBoundingClientRect()
+          return {
+            exists: true,
+            visible: style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && rect.width > 0 && rect.height > 0,
+            enabled: !(el as HTMLElement).hasAttribute('disabled'),
+            tagName: el.tagName,
+            text: (el.textContent || '').substring(0, 50),
+            classes: el.className || '',
+            id: el.id || ''
+          }
+        }, selector).catch(() => ({ exists: false, visible: false, enabled: false }))
+        
+        console.log('Playwright: Click failed. Element info:', JSON.stringify(elementInfo))
+        throw new Error(`Element ${selector} is not visible (may be hidden or off-screen)`)
+      }
+    }
+    await ensureVisible()
+    
+    await locator.waitFor({ state: 'visible', timeout: 10000 })
+    
+    const beforeUrl = page.url()
+    try {
+      await locator.click({ timeout: 10000, force: false })
+    } catch (error: any) {
+      if (!options.fromHealing && this.isPointerInterceptionError(error)) {
+        const resolved = await this.resolveBlockingOverlays(page)
+        if (resolved) {
+          console.log(`Playwright: Blocking overlay dismissed while clicking ${selector}, retrying click...`)
+          await locator.click({ timeout: 10000, force: false })
+        } else {
+          console.warn(`Playwright: Unable to resolve blocking overlay for ${selector}`)
+          throw error
+        }
+      } else {
+        throw error
+      }
+    }
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+    const afterUrl = page.url()
+    
+    if (!options.fromHealing && beforeUrl === afterUrl) {
+      await this.logLinkExpectation(locator)
+    }
+  }
+
+  private isPointerInterceptionError(error: any): boolean {
+    const message = typeof error?.message === 'string' ? error.message : ''
+    if (!message) return false
+    return (
+      message.includes('intercepts pointer events') ||
+      message.includes('Another element would receive the click') ||
+      message.includes('Element is not visible')
+    )
+  }
+
+  private async resolveBlockingOverlays(page: Page): Promise<boolean> {
+    let dismissed = false
+    
+    // Expanded overlay selectors including cookie banners
+    const overlaySelectors = [
+      // Standard modals
+      '[role="dialog"]',
+      '[aria-modal="true"]',
+      '[data-overlay]',
+      '.modal',
+      '.modal-backdrop',
+      '.dialog',
+      '.ReactModal__Overlay',
+      '.chakra-modal__overlay',
+      '.fixed.inset-0',
+      '.fixed[class*="inset-0"]',
+      // Cookie consent banners (most common patterns)
+      '[id*="cookie" i]',
+      '[class*="cookie" i]',
+      '[id*="consent" i]',
+      '[class*="consent" i]',
+      '[id*="gdpr" i]',
+      '[class*="gdpr" i]',
+      '[id*="privacy" i]',
+      '[class*="privacy-banner" i]',
+      '[class*="cookie-banner" i]',
+      '[class*="cookie-consent" i]',
+      '[class*="cookie-notice" i]',
+      '[class*="cookie-bar" i]',
+      '[class*="cookie-popup" i]',
+      '[data-cookie]',
+      '[data-consent]',
+      // Newsletter/popup banners
+      '[id*="newsletter" i]',
+      '[class*="newsletter" i]',
+      '[id*="popup" i]',
+      '[class*="popup" i]',
+      '[id*="overlay" i]',
+      '[class*="overlay" i]',
+      // Bottom sheets and slide-ins
+      '[class*="bottom-sheet" i]',
+      '[class*="slide-in" i]',
+      '[class*="drawer" i]',
+      // Notification banners
+      '[class*="notification" i]',
+      '[class*="toast" i]',
+      '[class*="alert" i]',
+      // Common fixed position patterns
+      '[class*="fixed"][class*="z-"]',
+      '[style*="position: fixed"][style*="z-index"]',
+    ]
+
+    // Expanded close button selectors including cookie-specific buttons
+    const closeButtonSelectors = [
+      // Standard close
+      'button:has-text("Close")',
+      'button:has-text("Dismiss")',
+      'button:has-text("Got it")',
+      'button:has-text("OK")',
+      // Cookie consent specific
+      'button:has-text("Accept")',
+      'button:has-text("Accept All")',
+      'button:has-text("Accept Cookies")',
+      'button:has-text("Accept All Cookies")',
+      'button:has-text("I Accept")',
+      'button:has-text("I Agree")',
+      'button:has-text("Agree")',
+      'button:has-text("Allow")',
+      'button:has-text("Allow All")',
+      'button:has-text("Allow Cookies")',
+      'button:has-text("Continue")',
+      'button:has-text("Proceed")',
+      'button:has-text("Save Preferences")',
+      'button:has-text("Save")',
+      'button:has-text("Confirm")',
+      // Decline/Reject options
+      'button:has-text("Reject")',
+      'button:has-text("Reject All")',
+      'button:has-text("Decline")',
+      'button:has-text("Decline All")',
+      // Close icons
+      'button[aria-label*="close" i]',
+      'button[aria-label*="dismiss" i]',
+      'button[aria-label*="accept" i]',
+      '[data-testid*="close" i]',
+      '[data-testid*="accept" i]',
+      '[data-testid*="dismiss" i]',
+      '.modal-close',
+      '.close',
+      '.close-button',
+      '[class*="close"][class*="button" i]',
+      // X buttons
+      'button:has-text("×")',
+      'button:has-text("✕")',
+      '[aria-label*="×" i]',
+      // Generic patterns
+      'button[type="button"]:has-text("×")',
+      '[role="button"][aria-label*="close" i]',
+    ]
+
+    // Check all overlay selectors
+    for (const selector of overlaySelectors) {
+      try {
+        const overlays = page.locator(selector)
+        const count = await overlays.count()
+        
+        if (count === 0) continue
+        
+        // Check each overlay instance
+        for (let i = 0; i < count; i++) {
+          const overlay = overlays.nth(i)
+          
+          try {
+            // Check if visible
+            const isVisible = await overlay.isVisible().catch(() => false)
+            if (!isVisible) continue
+            
+            // Check z-index to see if it's on top (blocking)
+            const zIndex = await overlay.evaluate((el) => {
+              const style = window.getComputedStyle(el)
+              return parseInt(style.zIndex) || 0
+            }).catch(() => 0)
+            
+            // Check if it covers significant portion of viewport
+            const boundingBox = await overlay.boundingBox().catch(() => null)
+            if (!boundingBox) continue
+            
+            const viewportSize = page.viewportSize()
+            if (!viewportSize) continue
+            
+            const coverage = (boundingBox.width * boundingBox.height) / (viewportSize.width * viewportSize.height)
+            
+            // Only dismiss if it's blocking (high z-index or covers >15% of screen)
+            // Cookie banners are often at bottom but still blocking
+            const isBlocking = zIndex >= 1000 || coverage > 0.15 || selector.toLowerCase().includes('cookie') || selector.toLowerCase().includes('consent')
+            
+            if (!isBlocking) continue
+            
+            console.log(`Playwright: Detected blocking overlay (${selector}, z-index: ${zIndex}, coverage: ${(coverage * 100).toFixed(1)}%). Attempting to dismiss...`)
+            
+            // Try close buttons first (prioritize cookie accept buttons)
+            let buttonDismissed = false
+            for (const closeSelector of closeButtonSelectors) {
+              try {
+                const closeButton = overlay.locator(closeSelector).first()
+                if ((await closeButton.count()) > 0 && (await closeButton.isVisible())) {
+                  await closeButton.click({ timeout: 2000, force: true })
+                  await page.waitForTimeout(800) // Wait longer for cookie banners to disappear
+                  
+                  // Verify it was dismissed
+                  const stillVisible = await overlay.isVisible().catch(() => false)
+                  if (!stillVisible) {
+                    console.log(`Playwright: Successfully dismissed overlay using button: ${closeSelector}`)
+                    dismissed = true
+                    buttonDismissed = true
+                    break
+                  }
+                }
+              } catch (error) {
+                // Continue to next button
+                continue
+              }
+            }
+            
+            // If close button didn't work, try clicking overlay itself (for cookie banners at bottom)
+            if (!buttonDismissed) {
+              try {
+                // For cookie banners, try clicking near the bottom-right corner where accept buttons often are
+                const box = await overlay.boundingBox()
+                if (box) {
+                  // Try clicking near bottom-right (where accept buttons often are)
+                  await overlay.click({ 
+                    position: { 
+                      x: Math.max(box.width - 50, box.width * 0.8), 
+                      y: Math.max(box.height - 30, box.height * 0.8) 
+                    }, 
+                    timeout: 1000 
+                  })
+                  await page.waitForTimeout(800)
+                  
+                  const stillVisible = await overlay.isVisible().catch(() => false)
+                  if (!stillVisible) {
+                    console.log(`Playwright: Successfully dismissed overlay by clicking it`)
+                    dismissed = true
+                    buttonDismissed = true
+                  }
+                }
+              } catch {
+                // If that fails, try top-left corner
+                try {
+                  await overlay.click({ position: { x: 5, y: 5 }, timeout: 1000 })
+                  await page.waitForTimeout(800)
+                  
+                  const stillVisible = await overlay.isVisible().catch(() => false)
+                  if (!stillVisible) {
+                    console.log(`Playwright: Successfully dismissed overlay by clicking corner`)
+                    dismissed = true
+                    buttonDismissed = true
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          } catch (error: any) {
+            console.warn(`Playwright: Error checking overlay ${selector}:`, error.message)
+            continue
+          }
+        }
+      } catch (error) {
+        // Continue to next selector
+        continue
+      }
+    }
+
+    // Last resort: Try Escape key
+    if (!dismissed) {
+      try {
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(800)
+        
+        // Verify something was dismissed by checking if any overlays disappeared
+        const hasOverlays = await page.locator('[role="dialog"], [aria-modal="true"], .modal, [id*="cookie" i], [class*="cookie" i]').count()
+        if (hasOverlays === 0) {
+          dismissed = true
+          console.log(`Playwright: Dismissed overlay using Escape key`)
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return dismissed
+  }
+
+  private async applyClickSelfHealing(page: Page, action: LLMAction): Promise<SelfHealingInfo | null> {
+    const originalSelector = action.selector
+    const candidates = this.buildHealingCandidates(action)
+    const tried = new Set<string>()
+    
+    for (const candidate of candidates) {
+      if (!candidate.selector || tried.has(candidate.selector)) {
+        continue
+      }
+      tried.add(candidate.selector)
+      try {
+        await this.performClick(page, candidate.selector, { fromHealing: true })
+        console.log(`Playwright: Self-healing succeeded via ${candidate.strategy} → ${candidate.selector}`)
+        return {
+          strategy: candidate.strategy,
+          originalSelector,
+          healedSelector: candidate.selector,
+          note: candidate.note,
+        }
+      } catch {
+        continue
+      }
+    }
+    
+    return null
+  }
+
+  private buildHealingCandidates(action: LLMAction): HealingCandidate[] {
+    const selector = action.selector || ''
+    const candidates: HealingCandidate[] = []
+    
+    candidates.push(...this.getLocatorFallbacks(selector))
+    candidates.push(...this.buildTextHeuristics(action))
+    candidates.push(...this.buildAttributeHeuristics(selector))
+    candidates.push(...this.buildStructuralHeuristics(selector))
+    
+    return candidates
+  }
+
+  private getLocatorFallbacks(selector: string): HealingCandidate[] {
+    const fallbacks: HealingCandidate[] = []
+    const hasTextRegex = /:has-text\((['"])(.+?)\1\)/
+    const match = selector.match(hasTextRegex)
+    if (match && match[2]) {
+      const text = match[2]
+      const escaped = text.replace(/"/g, '\\"')
+      const xpath = `xpath=//*[contains(normalize-space(.), "${escaped}")]`
+      fallbacks.push({
+        selector: xpath,
+        strategy: 'fallback',
+        note: `Converted :has-text("${text}") selector to XPath text match`,
+      })
+    }
+    return fallbacks
+  }
+
+  private buildTextHeuristics(action: LLMAction): HealingCandidate[] {
+    const text = this.extractTextHint(action)
+    if (!text) return []
+    const escaped = text.replace(/"/g, '\\"')
+    return [
+      {
+        selector: `xpath=//*[self::button or self::a or @role="button"][contains(normalize-space(.), "${escaped}")]`,
+        strategy: 'text',
+        note: `Matched by visible text "${text}"`,
+      },
+      {
+        selector: `xpath=//*[contains(@aria-label, "${escaped}") or contains(@title, "${escaped}")]`,
+        strategy: 'text',
+        note: `Matched by aria-label/title containing "${text}"`,
+      },
+    ]
+  }
+
+  private buildAttributeHeuristics(selector: string): HealingCandidate[] {
+    const candidates: HealingCandidate[] = []
+    if (!selector) return candidates
+    
+    const tagMatch = selector.match(/^[a-zA-Z]+/)
+    const tag = tagMatch ? tagMatch[0] : ''
+    
+    const idMatch = selector.match(/#([\w-]+)/)
+    if (idMatch) {
+      const rawId = idMatch[1]
+      const stablePrefix = rawId.replace(/[\d_]+$/g, '')
+      if (stablePrefix && stablePrefix.length >= 3 && stablePrefix !== rawId) {
+        const healed = `${tag ? `${tag}` : ''}[id^="${stablePrefix}"]`
+        candidates.push({
+          selector: healed,
+          strategy: 'attribute',
+          note: `Used ID prefix "${stablePrefix}" to match dynamic IDs`,
+        })
+      }
+    }
+    
+    const dataAttrMatch = selector.match(/\[(data-[^\]=]+)=["']?([^"' \]]+)["']?\]/)
+    if (dataAttrMatch) {
+      const attrName = dataAttrMatch[1]
+      const attrValue = dataAttrMatch[2]
+      const trimmed = attrValue.replace(/[\d_]+$/g, '')
+      if (trimmed && trimmed.length >= 3 && trimmed !== attrValue) {
+        candidates.push({
+          selector: `[${attrName}^="${trimmed}"]`,
+          strategy: 'attribute',
+          note: `Used ${attrName} prefix "${trimmed}" to bypass dynamic suffixes`,
+        })
+      }
+    }
+    
+    return candidates
+  }
+
+  private buildStructuralHeuristics(selector: string): HealingCandidate[] {
+    if (!selector) return []
+    const stripped = selector
+      .replace(/#[\w-]+/g, '')
+      .replace(/\[data-[^\]]+\]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    
+    if (!stripped || stripped === selector) {
+      return []
+    }
+    
+    return [{
+      selector: stripped,
+      strategy: 'position',
+      note: 'Removed dynamic IDs and data attributes to rely on structural path',
+    }]
+  }
+
+  private extractTextHint(action: LLMAction): string | null {
+    const candidates = [
+      action.target,
+      this.extractQuotedText(action.description || ''),
+      action.description,
+    ].filter(Boolean) as string[]
+    
+    for (const candidate of candidates) {
+      const cleaned = candidate.trim()
+      if (cleaned && cleaned.length <= 60) {
+        return cleaned
+      }
+    }
+    
+    return null
+  }
+
+  private extractQuotedText(text: string): string | null {
+    if (!text) return null
+    const match = text.match(/["“”'‘’](.+?)["“”'‘’]/)
+    return match?.[1] || null
+  }
+
+  private async logElementDebugInfo(page: Page, selector: string): Promise<void> {
+    try {
+      const locator = page.locator(selector)
+      const exists = await locator.count().then(count => count > 0).catch(() => false)
+      const visible = exists ? await locator.isVisible().catch(() => false) : false
+      const enabled = exists ? await locator.isEnabled().catch(() => false) : false
+      let details: any = {}
+      if (exists) {
+        details = await locator.first().evaluate((el) => ({
+          tagName: el.tagName,
+          text: el.textContent?.trim().substring(0, 80),
+          classes: el.className,
+          id: el.id,
+        })).catch(() => ({}))
+      }
+      console.error('Playwright: Click failed. Element info:', JSON.stringify({ exists, visible, enabled, ...details }))
+    } catch (infoError: any) {
+      console.error('Playwright: Could not get element info:', infoError.message)
+    }
+  }
+
+  private async logLinkExpectation(locator: ReturnType<Page['locator']>): Promise<void> {
+    try {
+      const tagName = await locator.evaluate((el) => el.tagName.toLowerCase()).catch(() => null)
+      if (tagName === 'a') {
+        const href = await locator.evaluate((el: HTMLAnchorElement) => el.href).catch(() => null)
+        if (href && !href.startsWith('#')) {
+          console.log(`Playwright: Link clicked but URL didn't change. Expected redirect to: ${href}`)
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
 
   /**
@@ -379,14 +1281,14 @@ export class PlaywrightRunner {
   }
 
   /**
-   * Release session and finalize video
+   * Release session and finalize video and trace
    * Closes browser and releases resources
    */
-  async releaseSession(sessionId: string): Promise<string | null> {
+  async releaseSession(sessionId: string): Promise<{ videoPath: string | null; tracePath: string | null }> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       console.warn('Playwright: Session not found:', sessionId)
-      return null
+      return { videoPath: null, tracePath: null }
     }
     
     console.log('Playwright: Releasing session:', sessionId)
@@ -394,6 +1296,97 @@ export class PlaywrightRunner {
     try {
       // Get video object before closing
       const video = session.page.video()
+      
+      // Stop and save trace (Time-Travel Debugger)
+      const tracePath = `./traces/trace_${sessionId}_${Date.now()}.zip`
+      let traceSuccess = false
+      let finalTracePath = tracePath
+      
+      // Only attempt to save trace if tracing was started and context is still valid
+      if (session.tracingStarted && !session.context._closed) {
+        try {
+          const fs = require('fs')
+          const path = require('path')
+          const zlib = require('zlib')
+          const { pipeline } = require('stream/promises')
+          
+          // Ensure traces directory exists
+          const tracesDir = path.dirname(tracePath)
+          if (!fs.existsSync(tracesDir)) {
+            fs.mkdirSync(tracesDir, { recursive: true })
+          }
+          
+          // Save trace - tracing.stop() is async and writes the file
+          await session.context.tracing.stop({ path: tracePath })
+          
+          // Wait a bit for file to be written (tracing.stop() is async)
+          let retries = 10
+          while (retries > 0 && !fs.existsSync(tracePath)) {
+            await new Promise(resolve => setTimeout(resolve, 100))
+            retries--
+          }
+          
+          if (fs.existsSync(tracePath)) {
+            // Additional compression with gzip (level 9)
+            // Playwright's trace.zip is already compressed, but gzip can reduce it further
+            const compressedPath = `${tracePath}.gz`
+            
+            try {
+              const gzip = zlib.createGzip({ level: 9 })
+              const source = fs.createReadStream(tracePath)
+              const destination = fs.createWriteStream(compressedPath)
+              
+              await pipeline(source, gzip, destination)
+              
+              // Verify compressed file exists
+              if (fs.existsSync(compressedPath)) {
+                const originalSize = fs.statSync(tracePath).size
+                const compressedSize = fs.statSync(compressedPath).size
+                const savings = ((1 - compressedSize / originalSize) * 100).toFixed(1)
+                
+                console.log(`Playwright: Trace compressed: ${(originalSize / 1024 / 1024).toFixed(2)}MB → ${(compressedSize / 1024 / 1024).toFixed(2)}MB (${savings}% reduction)`)
+                
+                // Delete original uncompressed file
+                fs.unlinkSync(tracePath)
+                
+                finalTracePath = compressedPath
+                traceSuccess = true
+              }
+            } catch (compressionError: any) {
+              console.error('Playwright: Failed to compress trace:', compressionError.message)
+              // Fall back to uncompressed trace
+              traceSuccess = true
+              finalTracePath = tracePath
+            }
+          }
+          
+          if (traceSuccess) {
+            console.log('Playwright: Trace saved:', finalTracePath)
+          } else {
+            console.warn('Playwright: Trace file not found after tracing.stop()')
+          }
+        } catch (error: any) {
+          // Check what type of error occurred
+          if (error.message?.includes('closed') || session.context._closed) {
+            console.error('Playwright: Context already closed, cannot save trace')
+          } else if (!session.tracingStarted) {
+            console.error('Playwright: Tracing was never started')
+          } else {
+            console.error('Playwright: Failed to save trace:', error.message)
+            if (error.stack) {
+              console.error('Playwright: Trace error stack:', error.stack)
+            }
+          }
+          traceSuccess = false
+        }
+      } else {
+        if (!session.tracingStarted) {
+          console.warn('Playwright: Tracing was not started, skipping trace save')
+        } else if (session.context._closed) {
+          console.warn('Playwright: Context already closed, cannot save trace')
+        }
+        traceSuccess = false
+      }
       
       // Close page first
       await session.page.close().catch(() => {})
@@ -418,8 +1411,11 @@ export class PlaywrightRunner {
       this.sessions.delete(sessionId)
       console.log('Playwright: Session released:', sessionId)
       
-      // Return video path if available
-      return videoPath
+      // Return video and trace paths if available
+      return { 
+        videoPath, 
+        tracePath: traceSuccess ? finalTracePath : null 
+      }
     } catch (error: any) {
       console.error('Playwright: Error releasing session:', error.message)
       // Still remove from map even if close fails
@@ -433,6 +1429,130 @@ export class PlaywrightRunner {
    */
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId)
+  }
+
+  /**
+   * Capture element bounding boxes for visual annotations (Iron Man HUD)
+   * Returns coordinates of all interactive elements on the page
+   */
+  async captureElementBounds(sessionId: string): Promise<Array<{
+    selector: string
+    bounds: { x: number; y: number; width: number; height: number }
+    type: string
+    text?: string
+    interactionType?: 'clicked' | 'typed' | 'analyzed' | 'failed'
+  }>> {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      throw new Error('Session not found')
+    }
+
+    try {
+      // Extract all interactive elements with their bounding boxes
+      // Unified approach with shared inline selector generation pattern
+      const elementsWithBounds = await session.page.evaluate(() => {
+        const result: Array<{
+          selector: string
+          bounds: { x: number; y: number; width: number; height: number }
+          type: string
+          text?: string
+        }> = []
+
+        // Unified element processing with fully inlined selector generation
+        // Priority: id > data-testid > data-id > name > className > defaultTag
+        // Element type configurations (no functions to avoid serialization issues)
+        const elementConfigs = [
+          { selector: 'button', type: 'button', hasName: false },
+          { selector: 'a', type: 'link', hasName: false },
+          { selector: 'input:not([type="hidden"])', type: 'input', hasName: true },
+          { selector: 'textarea', type: 'textarea', hasName: true },
+          { selector: 'select', type: 'select', hasName: true }
+        ]
+
+        // Process all element types in unified loop
+        for (let configIdx = 0; configIdx < elementConfigs.length; configIdx++) {
+          const config = elementConfigs[configIdx]
+          const elements = document.querySelectorAll(config.selector)
+          
+          for (let i = 0; i < elements.length; i++) {
+            const el = elements[i]
+            const rect = el.getBoundingClientRect()
+            
+            if (rect.width > 0 && rect.height > 0) {
+              // Fully inlined selector generation (no function calls)
+              let selector = ''
+              if (el.id) {
+                selector = '#' + el.id
+              } else {
+                const testId = el.getAttribute('data-testid')
+                if (testId) {
+                  selector = '[data-testid="' + testId + '"]'
+                } else {
+                  const dataId = el.getAttribute('data-id')
+                  if (dataId) {
+                    selector = '[data-id="' + dataId + '"]'
+                  } else {
+                    const name = el.getAttribute('name')
+                    if (name) {
+                      selector = '[name="' + name + '"]'
+                    } else {
+                      const className = el.className
+                      if (className && typeof className === 'string') {
+                        const classes = className.trim().split(/\s+/)
+                        if (classes.length > 0 && classes[0].length > 0) {
+                          selector = '.' + classes[0]
+                        }
+                      }
+                      if (!selector) {
+                        selector = config.type
+                      }
+                    }
+                  }
+                }
+              }
+
+              // Extract text based on element type (fully inlined)
+              let text: string | undefined = undefined
+              if (config.type === 'button' || config.type === 'link') {
+                const textContent = (el as HTMLElement).textContent
+                if (textContent) {
+                  text = textContent.trim().substring(0, 50)
+                }
+              } else if (config.type === 'input') {
+                const input = el as HTMLInputElement
+                text = input.placeholder || input.name || input.type
+              } else if (config.type === 'textarea') {
+                const textarea = el as HTMLTextAreaElement
+                text = textarea.placeholder || textarea.name
+              } else if (config.type === 'select') {
+                const select = el as HTMLSelectElement
+                text = select.getAttribute('aria-label') || select.name || undefined
+              }
+
+              result.push({
+                selector,
+                bounds: {
+                  x: Math.round(rect.x),
+                  y: Math.round(rect.y),
+                  width: Math.round(rect.width),
+                  height: Math.round(rect.height)
+                },
+                type: config.type,
+                text
+              })
+            }
+          }
+        }
+
+        return result
+      })
+
+      console.log(`Playwright: Captured ${elementsWithBounds.length} element bounds`)
+      return elementsWithBounds
+    } catch (error: any) {
+      console.error('Playwright: Failed to capture element bounds:', error.message)
+      return []
+    }
   }
 }
 

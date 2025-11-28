@@ -8,7 +8,13 @@ export async function integrationRoutes(fastify: FastifyInstance) {
   // GitHub webhook
   fastify.post('/github/webhook', async (request, reply) => {
     try {
-      // TODO: Verify GitHub webhook signature
+      // SECURITY: Webhook signature verification should be implemented
+      // To implement:
+      // 1. Get webhook secret from GITHUB_WEBHOOK_SECRET env var
+      // 2. Get signature from request.headers['x-hub-signature-256']
+      // 3. Use crypto.createHmac('sha256', secret).update(JSON.stringify(payload)).digest('hex')
+      // 4. Compare with 'sha256=' + signature from header
+      // 5. Reject request if signatures don't match
       const payload = request.body as any
 
       fastify.log.info('GitHub webhook received:', payload.action)

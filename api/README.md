@@ -19,7 +19,7 @@ Copy `.env.example` to `.env` and configure:
 - Redis: For BullMQ job queue
 - Supabase: Authentication (JWT-based)
 - Stripe: Billing
-- Mistral: LLM service (Mistral Large 2)
+- Llama 4: LLM service (via Ollama or cloud API)
 - Pinecone: Vector embeddings
 - Sentry: Error tracking
 

@@ -81,7 +81,7 @@ function getQueue(): Queue<JobData> {
   return testQueue
 }
 
-export async function enqueueTestRun(jobData: JobData) {
+export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?: boolean }) {
   try {
     const queue = getQueue()
     const connection = getRedisConnection()
@@ -89,9 +89,11 @@ export async function enqueueTestRun(jobData: JobData) {
     // Verify Redis connection before adding job
     await connection.ping()
     
+    const jobId = opts?.allowDuplicate ? undefined : `test-${jobData.runId}`
+
     const job = await queue.add('test-run', jobData, {
       priority: 1,
-      jobId: `test-${jobData.runId}`,
+      jobId,
     })
     
     console.log(`✅ Test run ${jobData.runId} enqueued successfully (Job ID: ${job.id})`)

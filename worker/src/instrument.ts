@@ -1,6 +1,6 @@
 // Sentry initialization - must be imported first
 import * as Sentry from '@sentry/node'
-import { nodeProfilingIntegration } from '@sentry/profiling-node'
+// import { nodeProfilingIntegration } from '@sentry/profiling-node'  // Temporarily disabled due to TypeError
 import { config } from './config/env'
 
 if (config.sentry.dsn) {
@@ -8,7 +8,7 @@ if (config.sentry.dsn) {
     Sentry.init({
       dsn: config.sentry.dsn,
       integrations: [
-        nodeProfilingIntegration(),
+        // nodeProfilingIntegration(),  // Temporarily disabled due to TypeError on setup
       ],
       // Send structured logs to Sentry
       enableLogs: true,

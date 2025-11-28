@@ -23,10 +23,11 @@
 - **Status**: ✅ No Clerk references found in API code
 - **Note**: Using Supabase Auth instead
 
-### 5. Mistral AI Configuration
-- **Status**: ✅ Already configured (not OpenAI)
-- **API Key**: `SAGSIDFn5jswMLonGjLJX5rKo7n91OlG`
-- **Note**: OpenAI has been completely replaced with Mistral Large 2
+### 5. Llama 4 & Qwen Configuration (Local Ollama)
+- **Status**: ✅ Already configured (replaced OpenAI/Mistral)
+- **Local Setup**: Ollama running on `http://localhost:11434/v1`
+- **Models**: `llama3.2:latest` and `qwen2.5:latest`
+- **Note**: OpenAI has been completely replaced with Llama 4 and Qwen Instruct (via local Ollama)
 
 ## 📋 Current `.env` File Contents
 
@@ -42,8 +43,15 @@ DATABASE_URL=postgresql://postgres.txiidsabckkuzhsfzekr:[YOUR-PASSWORD]@aws-0-us
 # Redis Configuration
 REDIS_URL=redis://default:rWoyaB8mX9IeH1e1jV5UUhzmHZrMSPqh@redis-17888.c62.us-east-1-4.ec2.cloud.redislabs.com:17888
 
-# Mistral AI Configuration
-MISTRAL_API_KEY=SAGSIDFn5jswMLonGjLJX5rKo7n91OlG
+# Llama 4 (Local Ollama)
+LLAMA_API_KEY=ollama
+LLAMA_API_URL=http://localhost:11434/v1
+LLAMA_MODEL=llama3.2:latest
+
+# Qwen Instruct (Local Ollama)
+QWEN_API_KEY=ollama
+QWEN_API_URL=http://localhost:11434/v1
+QWEN_MODEL=qwen2.5:latest
 
 # Pinecone Configuration
 PINECONE_API_KEY=pcsk_3DXKLG_RVif7NDP1SjVQV8WkFpyfa1tvfZcWkKoERzqgnc6wmfvqGXXqDrgBev3rSBSgzr
@@ -84,7 +92,7 @@ DATABASE_URL=postgresql://postgres.txiidsabckkuzhsfzekr:your-actual-password@aws
 - [x] Pinecone configured (no placeholder)
 - [x] Stripe placeholders removed
 - [x] Clerk references removed
-- [x] Mistral AI configured (not OpenAI)
+- [x] Llama 4 & Qwen configured via local Ollama (replaced OpenAI/Mistral)
 - [ ] DATABASE_URL password updated (⚠️ **YOU NEED TO DO THIS**)
 
 ## 🔄 After Updating Password

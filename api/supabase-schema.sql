@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
   id TEXT PRIMARY KEY,
   project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE, -- Link to authenticated user
-  status TEXT NOT NULL CHECK (status IN ('pending', 'queued', 'running', 'completed', 'failed', 'cancelled')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'queued', 'diagnosing', 'waiting_approval', 'running', 'completed', 'failed', 'cancelled')),
   build JSONB NOT NULL,
   profile JSONB NOT NULL,
   options JSONB,
@@ -34,7 +34,11 @@ CREATE TABLE IF NOT EXISTS test_runs (
   error TEXT,
   report_url TEXT,
   artifacts_url TEXT,
+  trace_url TEXT, -- Fallback for trace URL if artifact save fails
+  stream_url TEXT, -- WebRTC/live streaming URL for real-time test viewing
   steps JSONB, -- Array of test steps
+  diagnosis JSONB,
+  diagnosis_progress JSONB, -- Real-time diagnosis progress tracking
   paused BOOLEAN DEFAULT FALSE, -- Pause/resume support
   current_step INTEGER DEFAULT 0, -- Current step number for pause/resume
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -45,7 +49,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
 CREATE TABLE IF NOT EXISTS test_artifacts (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('screenshot', 'video', 'log', 'dom', 'network')),
+  type TEXT NOT NULL CHECK (type IN ('screenshot', 'video', 'log', 'dom', 'network', 'trace')),
   url TEXT NOT NULL,
   path TEXT NOT NULL,
   size BIGINT NOT NULL, -- Size in bytes

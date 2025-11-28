@@ -1,37 +1,73 @@
+// IMPORTANT: Load environment variables FIRST before any validation
+// This ensures .env file is loaded before we try to access process.env
+const dotenv = require('dotenv')
+const path = require('path')
+
+// Load .env file from api directory
+const envPath = path.resolve(process.cwd(), '.env')
+const result = dotenv.config({ path: envPath })
+
+// Log for debugging in development
+if (process.env.NODE_ENV === 'development' && result.error) {
+  console.warn('⚠️  Warning: Could not load .env file:', result.error.message)
+  console.warn('   Looking for .env at:', envPath)
+}
+
+/**
+ * Environment Variable Validation Utility
+ * Throws error at startup if required variables are missing
+ */
+function requireEnv(key: string, description?: string): string {
+  const value = process.env[key]
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable: ${key}${description ? ` (${description})` : ''}`
+    )
+  }
+  return value
+}
+
+/**
+ * Optional environment variable with default value
+ */
+function optionalEnv(key: string, defaultValue: string): string {
+  return process.env[key] || defaultValue
+}
+
+/**
+ * Environment Configuration
+ * Validates required variables at startup to fail fast
+ */
 export const config = {
-  port: parseInt(process.env.PORT || '3001', 10),
-  host: process.env.HOST || '0.0.0.0',
-  nodeEnv: process.env.NODE_ENV || 'development',
+  port: parseInt(optionalEnv('PORT', '3001'), 10),
+  host: optionalEnv('HOST', '0.0.0.0'),
+  nodeEnv: optionalEnv('NODE_ENV', 'development'),
   
   supabase: {
-    url: process.env.SUPABASE_URL || '',
-    key: process.env.SUPABASE_KEY || '',
-    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+    url: requireEnv('SUPABASE_URL', 'Supabase project URL'),
+    key: requireEnv('SUPABASE_KEY', 'Supabase anon/public key'),
+    serviceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY', 'Supabase service role key for admin operations'),
   },
   
   redis: {
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    // Optional: Falls back to local Redis for development
+    url: optionalEnv('REDIS_URL', 'redis://localhost:6379'),
   },
   
-  
-  // Stripe removed - not needed
-  
-  mistral: {
-    apiKey: process.env.MISTRAL_API_KEY || '',
-  },
-  
+  // Optional AI/ML services (features degrade gracefully if missing)
   pinecone: {
-    apiKey: process.env.PINECONE_API_KEY || '',
-    indexName: process.env.PINECONE_INDEX_NAME || 'testlattice',
-    host: process.env.PINECONE_HOST || '',
-    region: process.env.PINECONE_REGION || 'us-east-1',
+    apiKey: optionalEnv('PINECONE_API_KEY', ''),
+    indexName: optionalEnv('PINECONE_INDEX_NAME', 'testlattice'),
+    host: optionalEnv('PINECONE_HOST', ''),
+    region: optionalEnv('PINECONE_REGION', 'us-east-1'),
   },
   
+  // Optional monitoring (graceful degradation)
   sentry: {
-    dsn: process.env.SENTRY_DSN || '',
+    dsn: optionalEnv('SENTRY_DSN', ''),
   },
   
-  appUrl: process.env.APP_URL || 'http://localhost:3000',
-  apiUrl: process.env.API_URL || `http://${process.env.HOST || 'localhost'}:${parseInt(process.env.PORT || '3001', 10)}`,
+  appUrl: optionalEnv('APP_URL', 'http://localhost:3000'),
+  apiUrl: optionalEnv('API_URL', `http://${process.env.HOST || 'localhost'}:${parseInt(process.env.PORT || '3001', 10)}`),
 }
 

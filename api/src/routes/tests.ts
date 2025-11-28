@@ -1,17 +1,49 @@
 // Test routes
 import { FastifyInstance } from 'fastify'
-import { CreateTestRunRequest, TestRunStatus } from '../types'
+import { CreateTestRunRequest, TestRunStatus, TestRun, TestArtifact } from '../types'
 import { Database } from '../lib/db'
 import { enqueueTestRun } from '../lib/queue'
 import { authenticate, AuthenticatedRequest } from '../middleware/auth'
+import { getTestControlWS } from '../index'
+import { createClient } from '@supabase/supabase-js'
+
+import { config } from '../config/env'
 
 export async function testRoutes(fastify: FastifyInstance) {
+  // Initialize Supabase client for pre-signed URLs (lazy initialization)
+  // Uses config which validates env vars at startup
+  const getSupabaseClient = () => {
+    return createClient(
+      config.supabase.url,
+      config.supabase.serviceRoleKey
+    )
+  }
   // Create a new test run (requires authentication)
   fastify.post<{ Body: CreateTestRunRequest }>('/run', {
     preHandler: authenticate,
   }, async (request: AuthenticatedRequest, reply) => {
     try {
       const { projectId, build, profile, options } = request.body
+
+      const normalizedOptions = {
+        ...(options || {}),
+        approvalPolicy: options?.approvalPolicy ?? { mode: 'manual' as const },
+      }
+
+      // Enforce currently supported modes (single + multi only)
+      const supportedModes: Array<'single' | 'multi'> = ['single', 'multi']
+      if (options?.testMode && !supportedModes.includes(options.testMode as 'single' | 'multi')) {
+        return reply.code(400).send({
+          error: 'Unsupported test mode selected',
+          message: 'All Pages and Monkey Explorer are upcoming features. Please choose single-page or multi-page tests.',
+        })
+      }
+      if (options?.allPages || options?.monkeyMode) {
+        return reply.code(400).send({
+          error: 'Unsupported test configuration',
+          message: 'All Pages and Monkey Explorer are not available yet. Disable legacy flags and try again.',
+        })
+      }
 
       // Validate project exists
       const project = await Database.getProject(projectId)
@@ -24,7 +56,7 @@ export async function testRoutes(fastify: FastifyInstance) {
         projectId,
         build,
         profile,
-        options,
+        options: normalizedOptions,
         status: TestRunStatus.PENDING,
       }, request.user?.id) // Pass authenticated user ID
 
@@ -35,7 +67,7 @@ export async function testRoutes(fastify: FastifyInstance) {
           projectId,
           build,
           profile,
-          options,
+          options: normalizedOptions,
         })
         
         // Update status to queued only if enqueue succeeded
@@ -221,8 +253,8 @@ export async function testRoutes(fastify: FastifyInstance) {
         return reply.code(404).send({ error: 'Test run not found' })
       }
 
-      if (testRun.status !== TestRunStatus.RUNNING) {
-        return reply.code(400).send({ error: 'Can only pause running test runs' })
+      if (![TestRunStatus.RUNNING, TestRunStatus.DIAGNOSING].includes(testRun.status)) {
+        return reply.code(400).send({ error: 'Can only pause active test runs' })
       }
 
       const updated = await Database.updateTestRun(runId, {
@@ -246,18 +278,292 @@ export async function testRoutes(fastify: FastifyInstance) {
         return reply.code(404).send({ error: 'Test run not found' })
       }
 
-      if (testRun.status !== TestRunStatus.RUNNING) {
-        return reply.code(400).send({ error: 'Can only resume running test runs' })
+      if (![TestRunStatus.RUNNING, TestRunStatus.WAITING_APPROVAL, TestRunStatus.DIAGNOSING].includes(testRun.status)) {
+        return reply.code(400).send({ error: 'Can only resume running, diagnosing, or waiting test runs' })
       }
 
-      const updated = await Database.updateTestRun(runId, {
-        paused: false,
-      })
+      // If waiting approval, queue it again
+      if (testRun.status === TestRunStatus.WAITING_APPROVAL) {
+        await enqueueTestRun({
+          runId: testRun.id,
+          projectId: testRun.projectId,
+          build: testRun.build,
+          profile: testRun.profile,
+          options: testRun.options
+        }, { allowDuplicate: true })
+        
+        await Database.updateTestRun(runId, {
+          status: TestRunStatus.QUEUED
+        })
+      } else {
+        // Just resume paused run
+        await Database.updateTestRun(runId, {
+          paused: false,
+        })
+      }
 
-      return reply.send({ success: true, testRun: updated })
+      const updatedRun = await Database.getTestRun(runId)
+      return reply.send({ success: true, testRun: updatedRun })
     } catch (error: any) {
       fastify.log.error(error)
       return reply.code(500).send({ error: error.message || 'Failed to resume test run' })
+    }
+  })
+
+  // Approve test run (Explicit endpoint for approval)
+  fastify.post<{ Params: { runId: string } }>('/:runId/approve', async (request, reply) => {
+    try {
+      const { runId } = request.params
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      if (testRun.status !== TestRunStatus.WAITING_APPROVAL) {
+        return reply.code(400).send({ error: 'Test run is not waiting for approval' })
+      }
+
+      await enqueueTestRun({
+        runId: testRun.id,
+        projectId: testRun.projectId,
+        build: testRun.build,
+        profile: testRun.profile,
+        options: testRun.options
+      }, { allowDuplicate: true })
+      
+      await Database.updateTestRun(runId, {
+        status: TestRunStatus.QUEUED
+      })
+
+      const updatedRun = await Database.getTestRun(runId)
+      return reply.send({ success: true, testRun: updatedRun })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to approve test run' })
+    }
+  })
+
+  // Get stream URL and token for live viewing
+  fastify.get<{ Params: { runId: string } }>('/:runId/stream', async (request, reply) => {
+    try {
+      const { runId } = request.params
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      // Get stream info from worker (via WebSocket or API)
+      // For now, return placeholder - worker will notify via WebSocket
+      const testControlWS = getTestControlWS()
+      if (testControlWS && 'getStats' in testControlWS) {
+        // Check if stream is available
+        // In production, this would query the worker for stream URL
+      }
+
+      // Return stream info (worker will update this via WebSocket)
+      return reply.send({
+        streamUrl: process.env.FRAME_STREAM_BASE_URL 
+          ? `${process.env.FRAME_STREAM_BASE_URL}/stream/${runId}`
+          : `http://localhost:8080/stream/${runId}`,
+        livekitUrl: process.env.LIVEKIT_URL,
+        // Token will be provided via WebSocket when stream starts
+      })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to get stream info' })
+    }
+  })
+
+  // Override next AI step with manual action
+  fastify.post<{ 
+    Params: { runId: string }
+    Body: { action: { type: string; selector?: string; value?: string } }
+  }>('/:runId/override-step', async (request, reply) => {
+    try {
+      const { runId } = request.params
+      const { action } = request.body
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      if (![TestRunStatus.RUNNING, TestRunStatus.DIAGNOSING].includes(testRun.status)) {
+        return reply.code(400).send({ error: 'Can only override steps in active test runs' })
+      }
+
+      // Send override via WebSocket
+      const testControlWS = getTestControlWS()
+      if (testControlWS) {
+        testControlWS.broadcast(runId, {
+          type: 'step_override',
+          action,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
+      return reply.send({ 
+        success: true, 
+        message: 'Step override queued',
+        action 
+      })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to override step' })
+    }
+  })
+
+  // Update test instructions mid-run
+  fastify.post<{ 
+    Params: { runId: string }
+    Body: { instructions: string }
+  }>('/:runId/update-instructions', async (request, reply) => {
+    try {
+      const { runId } = request.params
+      const { instructions } = request.body
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      if (![TestRunStatus.RUNNING, TestRunStatus.DIAGNOSING].includes(testRun.status)) {
+        return reply.code(400).send({ error: 'Can only update instructions in active test runs' })
+      }
+
+      // Update instructions in database
+      const updatedOptions = {
+        ...testRun.options,
+        customInstructions: instructions,
+        instructionsUpdatedAt: new Date().toISOString(),
+      }
+      await Database.updateTestRun(runId, { options: updatedOptions })
+
+      // Notify via WebSocket
+      const testControlWS = getTestControlWS()
+      if (testControlWS) {
+        testControlWS.broadcast(runId, {
+          type: 'instructions_updated',
+          instructions,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
+      return reply.send({ 
+        success: true, 
+        message: 'Instructions updated',
+        instructions 
+      })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to update instructions' })
+    }
+  })
+
+  // Get step data for replay
+  fastify.get<{ Params: { runId: string; stepNumber: string } }>('/:runId/steps/:stepNumber', async (request, reply) => {
+    try {
+      const { runId, stepNumber } = request.params
+      const stepNum = parseInt(stepNumber, 10)
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      if (!testRun.steps || !Array.isArray(testRun.steps)) {
+        return reply.code(404).send({ error: 'No steps available' })
+      }
+
+      const step = testRun.steps.find((s: any) => s.stepNumber === stepNum)
+      if (!step) {
+        return reply.code(404).send({ error: 'Step not found' })
+      }
+
+      return reply.send({ step })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to get step data' })
+    }
+  })
+
+  // Inject manual action (Human-in-the-Loop / God Mode)
+  fastify.post<{ 
+    Params: { runId: string }
+    Body: {
+      action: 'click' | 'type' | 'scroll' | 'navigate'
+      selector?: string
+      value?: string
+      description: string
+    }
+  }>('/:runId/inject-action', async (request, reply) => {
+    try {
+      const { runId } = request.params
+      const { action, selector, value, description } = request.body
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      if (testRun.status !== TestRunStatus.RUNNING) {
+        return reply.code(400).send({ error: 'Can only inject actions into running tests' })
+      }
+
+      // Get WebSocket instance and queue the manual action
+      const ws = getTestControlWS()
+      if (!ws) {
+        return reply.code(503).send({ error: 'WebSocket server not available' })
+      }
+
+      // Queue the action (worker will poll for this)
+      const manualAction = {
+        action,
+        selector,
+        value,
+        description,
+        timestamp: new Date().toISOString(),
+      }
+
+      // In a real implementation, you'd store this in Redis or a database queue
+      // For now, we'll use the WebSocket's in-memory queue
+      ws.broadcast(runId, {
+        type: 'manual_action_injected',
+        action: manualAction,
+        timestamp: new Date().toISOString(),
+      })
+
+      fastify.log.info(`Manual action injected for test run ${runId}:`, action, selector)
+
+      return reply.send({ success: true, action: manualAction })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to inject action' })
+    }
+  })
+
+  // Get queued manual actions for worker (Human-in-the-Loop)
+  fastify.get<{ Params: { runId: string } }>('/:runId/manual-actions', async (request, reply) => {
+    try {
+      const { runId } = request.params
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      const ws = getTestControlWS()
+      if (!ws) {
+        return reply.send({ actions: [] })
+      }
+
+      const actions = ws.getManualActions(runId)
+      return reply.send({ actions })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to get manual actions' })
     }
   })
 
@@ -340,9 +646,10 @@ export async function testRoutes(fastify: FastifyInstance) {
       const steps = testRun.steps || []
       const { config } = await import('../config/env')
       const apiBaseUrl = config.apiUrl || process.env.API_URL || `http://localhost:3001`
+      const artifacts = await Database.getArtifacts(runId)
       
       // Generate HTML report
-      const reportHtml = generateReportHtml(runId, testRun, steps, apiBaseUrl)
+      const reportHtml = generateReportHtml(runId, testRun, steps, apiBaseUrl, artifacts)
       
       reply.type('text/html')
       return reply.send(reportHtml)
@@ -351,6 +658,58 @@ export async function testRoutes(fastify: FastifyInstance) {
       return reply.code(500).send({ error: error.message || 'Failed to generate report view' })
     }
   })
+
+  // Generate pre-signed URL for artifact download
+  // This allows direct downloads from Supabase without going through API server
+  fastify.get<{ Params: { runId: string; artifactId: string } }>(
+    '/:runId/artifacts/:artifactId/download',
+    async (request, reply) => {
+      try {
+        const { runId, artifactId } = request.params
+
+        // Get artifact from database
+        const artifacts = await Database.getArtifacts(runId)
+        const artifact = artifacts.find(a => a.id === artifactId)
+
+        if (!artifact) {
+          return reply.code(404).send({ error: 'Artifact not found' })
+        }
+
+        // Extract path from public URL
+        const urlMatch = artifact.url.match(/\/object\/public\/[^/]+\/(.+)$/)
+        if (!urlMatch) {
+          return reply.code(500).send({ error: 'Invalid artifact URL format' })
+        }
+
+        const path = urlMatch[1]
+
+        // Generate pre-signed URL (1 hour expiry)
+        const supabase = getSupabaseClient()
+        const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts'
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from(bucketName)
+          .createSignedUrl(path, 3600)
+
+        if (signedError || !signedData) {
+          fastify.log.error('Failed to generate signed URL:', signedError)
+          return reply.code(500).send({ error: 'Failed to generate download URL' })
+        }
+
+        return reply.send({ 
+          downloadUrl: signedData.signedUrl,
+          expiresIn: 3600,
+          artifact: {
+            id: artifact.id,
+            type: artifact.type,
+            size: artifact.size,
+          }
+        })
+      } catch (error: any) {
+        fastify.log.error('Error generating download URL:', error)
+        return reply.code(500).send({ error: error.message || 'Failed to generate download URL' })
+      }
+    }
+  )
 
   // Download report as ZIP
   fastify.get<{ Params: { runId: string } }>('/:runId/download', async (request, reply) => {
@@ -671,7 +1030,15 @@ export async function testRoutes(fastify: FastifyInstance) {
       }
 
       // Generate HTML summary report
-      const htmlReport = generateDetailedReportHtml(runId, testRun, steps, reportData.issues, reportData.warnings, reportData.recommendations)
+      const htmlReport = generateDetailedReportHtml(
+        runId,
+        testRun,
+        steps,
+        reportData.issues,
+        reportData.warnings,
+        reportData.recommendations,
+        artifacts
+      )
       archive.append(htmlReport, { name: 'report.html' })
 
       // Set up promise to wait for archive completion BEFORE finalizing
@@ -718,10 +1085,55 @@ export async function testRoutes(fastify: FastifyInstance) {
       }
     }
   })
+
+  // Delete test run
+  fastify.delete<{ Params: { runId: string } }>('/:runId', {
+    preHandler: authenticate,
+  }, async (request: AuthenticatedRequest, reply) => {
+    try {
+      const { runId } = request.params
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      // Delete the test run
+      await Database.deleteTestRun(runId)
+
+      return reply.send({ success: true, message: 'Test run deleted successfully' })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to delete test run' })
+    }
+  })
 }
 
 // Generate report HTML (works with partial steps) - for report-view endpoint
-function generateReportHtml(runId: string, testRun: TestRun, steps: any[], apiBaseUrl: string): string {
+function generateReportHtml(
+  runId: string,
+  testRun: TestRun,
+  steps: any[],
+  apiBaseUrl: string,
+  artifacts: TestArtifact[] = []
+): string {
+  const modeLabel = (() => {
+    switch (testRun.options?.testMode) {
+      case 'all':
+        return 'All Pages Crawl'
+      case 'multi':
+        return 'Multi-page Flow'
+      case 'monkey':
+        return 'Monkey Explorer'
+      default:
+        return 'Single Flow'
+    }
+  })()
+
+  const healingSteps = steps.filter((step) => step?.selfHealing)
+  const videoArtifact = artifacts.find((artifact) => artifact.type === 'video')
+  const videoUrl = videoArtifact?.url || testRun.artifactsUrl || ''
+
   return `
 <!DOCTYPE html>
 <html>
@@ -782,6 +1194,10 @@ function generateReportHtml(runId: string, testRun: TestRun, steps: any[], apiBa
         <span>${steps.length} / ${testRun.options?.maxSteps || 10}</span>
       </div>
       <div class="info-item">
+        <strong>Test Mode</strong>
+        <span>${modeLabel}</span>
+      </div>
+      <div class="info-item">
         <strong>Started At</strong>
         <span>${testRun.startedAt ? new Date(testRun.startedAt).toLocaleString() : 'N/A'}</span>
       </div>
@@ -790,6 +1206,36 @@ function generateReportHtml(runId: string, testRun: TestRun, steps: any[], apiBa
         <span>${testRun.currentStep || steps.length}</span>
       </div>
     </div>
+
+    ${healingSteps.length ? `
+    <h2>Self-Healing Suggestions (${healingSteps.length})</h2>
+    <ul>
+      ${healingSteps.map(step => `
+        <li style="margin-bottom:0.5rem;">
+          <strong>Step ${step.stepNumber}:</strong>
+          Replaced <code>${step.selfHealing?.originalSelector || 'unknown'}</code> with
+          <code>${step.selfHealing?.healedSelector}</code> (${step.selfHealing?.strategy} match).
+          ${step.selfHealing?.note ? `<span>${step.selfHealing.note}</span>` : ''}
+        </li>
+      `).join('')}
+    </ul>
+    ` : ''}
+
+    <h2>Full Video Recording</h2>
+    ${videoUrl ? `
+      <div style="background-color:#111827;border-radius:0.5rem;padding:1rem;margin-bottom:1.5rem;">
+        <video controls style="width:100%;max-height:480px;background:#000;border-radius:0.5rem;" src="${videoUrl}">
+          Your browser does not support the video tag.
+        </video>
+        <p style="font-size:0.875rem;color:#9ca3af;margin-top:0.5rem;">
+          Recording hosted in Supabase storage. If the video does not play, ensure your browser can reach ${videoUrl}.
+        </p>
+      </div>
+    ` : `
+      <div style="padding:1rem;border-radius:0.5rem;background-color:#fef3c7;border:1px solid #fcd34d;color:#92400e;margin-bottom:1.5rem;">
+        Recording not available. The worker may still be processing the video or the upload failed.
+      </div>
+    `}
 
     <h2>Test Steps (${steps.length})</h2>
     ${steps.length === 0 ? '<p>No steps completed yet.</p>' : steps.map((step, idx) => `
@@ -803,7 +1249,9 @@ function generateReportHtml(runId: string, testRun: TestRun, steps: any[], apiBa
       <div class="step-details">
         ${step.value ? `<p><strong>Value:</strong> ${step.value}</p>` : ''}
         <p><strong>Timestamp:</strong> ${new Date(step.timestamp).toLocaleString()}</p>
+        ${step.mode ? `<p><strong>Action Source:</strong> ${step.mode === 'monkey' ? 'Monkey Explorer' : step.mode === 'speculative' ? 'Speculative Flow' : 'LLM Planner'}</p>` : ''}
         ${step.error ? `<p style="color: #991b1b;"><strong>Error:</strong> ${step.error}</p>` : ''}
+        ${step.selfHealing ? `<p><strong>Self-Healing:</strong> Updated <code>${step.selfHealing.originalSelector || 'selector'}</code> → <code>${step.selfHealing.healedSelector}</code> (${step.selfHealing.strategy}). ${step.selfHealing.note || ''}</p>` : ''}
         ${step.screenshotUrl ? `<a href="${step.screenshotUrl}" target="_blank" class="artifact-link">View Screenshot →</a>` : ''}
       </div>
     </div>
@@ -835,7 +1283,32 @@ function generateReportHtml(runId: string, testRun: TestRun, steps: any[], apiBa
 }
 
 // Generate detailed report HTML with issues, warnings, and recommendations (for ZIP download)
-function generateDetailedReportHtml(runId: string, testRun: TestRun, steps: any[], issues: string[], warnings: string[], recommendations: string[], comprehensiveData?: any): string {
+function generateDetailedReportHtml(
+  runId: string,
+  testRun: TestRun,
+  steps: any[],
+  issues: string[],
+  warnings: string[],
+  recommendations: string[],
+  artifacts: TestArtifact[] = []
+): string {
+  const modeLabel = (() => {
+    switch (testRun.options?.testMode) {
+      case 'all':
+        return 'All Pages Crawl'
+      case 'multi':
+        return 'Multi-page Flow'
+      case 'monkey':
+        return 'Monkey Explorer'
+      default:
+        return 'Single Flow'
+    }
+  })()
+
+  const healingSteps = steps.filter(step => step?.selfHealing)
+  const videoArtifact = artifacts.find((artifact) => artifact.type === 'video')
+  const videoUrl = videoArtifact?.url || testRun.artifactsUrl || ''
+
   return `
 <!DOCTYPE html>
 <html>
@@ -897,6 +1370,10 @@ function generateDetailedReportHtml(runId: string, testRun: TestRun, steps: any[
         <span>${steps.length} / ${testRun.options?.maxSteps || 10}</span>
       </div>
       <div class="info-item">
+        <strong>Test Mode</strong>
+        <span>${modeLabel}</span>
+      </div>
+      <div class="info-item">
         <strong>Started At</strong>
         <span>${testRun.startedAt ? new Date(testRun.startedAt).toLocaleString() : 'N/A'}</span>
       </div>
@@ -909,6 +1386,33 @@ function generateDetailedReportHtml(runId: string, testRun: TestRun, steps: any[
         <span>${steps.filter(s => !s.success).length}</span>
       </div>
     </div>
+
+    ${healingSteps.length ? `
+    <h2>Self-Healing Suggestions (${healingSteps.length})</h2>
+    <ul>
+      ${healingSteps.map(step => `
+        <li class="recommendation">
+          Step ${step.stepNumber}: Updated <code>${step.selfHealing?.originalSelector || 'selector'}</code> → <code>${step.selfHealing?.healedSelector}</code> (${step.selfHealing?.strategy}). ${step.selfHealing?.note || ''}
+        </li>
+      `).join('')}
+    </ul>
+    ` : ''}
+
+    <h2>Full Video Recording</h2>
+    ${videoUrl ? `
+      <div style="background-color:#111827;border-radius:0.5rem;padding:1rem;margin-bottom:1.5rem;">
+        <video controls style="width:100%;max-height:480px;background:#000;border-radius:0.5rem;" src="${videoUrl}">
+          Your browser does not support the video tag.
+        </video>
+        <p style="font-size:0.875rem;color:#9ca3af;margin-top:0.5rem;">
+          Recording hosted in Supabase storage. If the video does not play, ensure your browser can reach ${videoUrl}.
+        </p>
+      </div>
+    ` : `
+      <div style="padding:1rem;border-radius:0.5rem;background-color:#fef3c7;border:1px solid #fcd34d;color:#92400e;margin-bottom:1.5rem;">
+        Recording not available. The worker may still be processing the video or the upload failed.
+      </div>
+    `}
 
     ${issues.length > 0 ? `
     <h2>Issues Detected</h2>
@@ -943,7 +1447,9 @@ function generateDetailedReportHtml(runId: string, testRun: TestRun, steps: any[
       <div class="step-details">
         ${step.value ? `<p><strong>Value:</strong> ${step.value}</p>` : ''}
         <p><strong>Timestamp:</strong> ${new Date(step.timestamp).toLocaleString()}</p>
+        ${step.mode ? `<p><strong>Action Source:</strong> ${step.mode === 'monkey' ? 'Monkey Explorer' : step.mode === 'speculative' ? 'Speculative Flow' : 'LLM Planner'}</p>` : ''}
         ${step.error ? `<p style="color: #991b1b;"><strong>Error:</strong> ${step.error}</p>` : ''}
+        ${step.selfHealing ? `<p><strong>Self-Healing:</strong> Updated <code>${step.selfHealing.originalSelector || 'selector'}</code> → <code>${step.selfHealing.healedSelector}</code> (${step.selfHealing.strategy}). ${step.selfHealing.note || ''}</p>` : ''}
         ${step.screenshotUrl ? `<p><em>Screenshot available in screenshots/step-${step.stepNumber}.png</em></p>` : ''}
       </div>
     </div>

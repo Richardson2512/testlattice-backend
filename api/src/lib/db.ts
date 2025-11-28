@@ -25,7 +25,10 @@ export class Database {
         error: data.error || null,
         report_url: data.reportUrl || null,
         artifacts_url: data.artifactsUrl || null,
+        trace_url: data.traceUrl || null,
+        stream_url: data.streamUrl || null,
         steps: data.steps || null,
+        diagnosis: data.diagnosis || null,
         paused: false,
         current_step: 0,
         created_at: now,
@@ -70,7 +73,11 @@ export class Database {
     if (updates.error !== undefined) updateData.error = updates.error
     if (updates.reportUrl !== undefined) updateData.report_url = updates.reportUrl
     if (updates.artifactsUrl !== undefined) updateData.artifacts_url = updates.artifactsUrl
+    if (updates.traceUrl !== undefined) updateData.trace_url = updates.traceUrl
+    if (updates.streamUrl !== undefined) updateData.stream_url = updates.streamUrl
     if (updates.steps !== undefined) updateData.steps = updates.steps
+    if (updates.diagnosis !== undefined) updateData.diagnosis = updates.diagnosis
+    if (updates.diagnosisProgress !== undefined) updateData.diagnosis_progress = updates.diagnosisProgress
     if (updates.paused !== undefined) updateData.paused = updates.paused
     if (updates.currentStep !== undefined) updateData.current_step = updates.currentStep
 
@@ -106,6 +113,19 @@ export class Database {
     }
 
     return (data || []).map(this.mapTestRunFromDb)
+  }
+
+  static async deleteTestRun(id: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('test_runs')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      throw new Error(`Failed to delete test run: ${error.message}`)
+    }
+
+    return true
   }
 
   // Projects
@@ -239,7 +259,11 @@ export class Database {
       error: row.error,
       reportUrl: row.report_url,
       artifactsUrl: row.artifacts_url,
+      traceUrl: row.trace_url || null,
+      streamUrl: row.stream_url || null,
       steps: row.steps,
+      diagnosis: row.diagnosis || null,
+      diagnosisProgress: row.diagnosis_progress || null,
       paused: row.paused || false,
       currentStep: row.current_step || 0,
     }

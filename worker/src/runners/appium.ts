@@ -1,6 +1,7 @@
 // Appium runner using real Appium WebDriver protocol via WebDriverIO
 import { remote, RemoteOptions, Browser } from 'webdriverio'
-import { TestProfile, LLMAction, DeviceProfile } from '../types'
+import { TestProfile, LLMAction, DeviceProfile, ActionExecutionResult } from '../types'
+import { validateUrlOrThrow } from '../utils/urlValidator'
 
 export interface MobileSession {
   id: string
@@ -153,7 +154,7 @@ export class AppiumRunner {
    * Execute action
    * Uses real Appium WebDriver API to execute actions
    */
-  async executeAction(sessionId: string, action: LLMAction): Promise<void> {
+  async executeAction(sessionId: string, action: LLMAction): Promise<ActionExecutionResult | void> {
     const session = this.sessions.get(sessionId)
     if (!session || !session.driver) {
       throw new Error(`Session ${sessionId} not found or driver not initialized`)
@@ -211,9 +212,13 @@ export class AppiumRunner {
           // For mobile apps, navigation might mean launching an activity or deep link
           // For web apps on mobile, use getUrl
           if (action.value.startsWith('http://') || action.value.startsWith('https://')) {
+            // SECURITY: Validate URL to prevent SSRF attacks
+            // Block localhost, private IPs, and cloud metadata endpoints
+            validateUrlOrThrow(action.value)
+            
             await driver.url(action.value)
           } else {
-            // Assume it's an app activity or deep link
+            // Assume it's an app activity or deep link (no URL validation needed for app IDs)
             await driver.execute('mobile: activateApp', { appId: action.value })
           }
           await driver.pause(1000)
@@ -238,6 +243,7 @@ export class AppiumRunner {
         default:
           console.warn('Appium: Unknown action:', action.action)
       }
+      return
     } catch (error: any) {
       console.error('Appium: Action execution failed:', error.message)
       const { formatErrorForStep } = await import('../utils/errorFormatter')

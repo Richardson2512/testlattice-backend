@@ -14,7 +14,7 @@ This repository contains two main backend services:
 
 ### ⚙️ Worker Service (`/worker`)
 - **Technology**: Node.js + TypeScript
-- **Purpose**: Worker service that processes test jobs, coordinates with LLM (Mistral Large 2), and executes tests via Playwright/Appium
+- **Purpose**: Worker service that processes test jobs, coordinates with LLM (Llama 4), and executes tests via Playwright/Appium
 - **Queue**: BullMQ + Redis
 
 ## Tech Stack
@@ -25,7 +25,7 @@ This repository contains two main backend services:
 - **Database**: Supabase (PostgreSQL)
 - **Storage**: Supabase Storage (S3-compatible)
 - **Queue**: BullMQ + Redis
-- **AI/ML**: Mistral Large 2 (LLM), Pinecone (Embeddings), Deepseek (Instruction Parsing)
+- **AI/ML**: Llama 4 (LLM), Pinecone (Embeddings), Qwen Instruct (Instruction Parsing)
 - **Test Runners**: Playwright (Web), Appium (Mobile)
 - **Monitoring**: Sentry
 - **Authentication**: Supabase Auth
@@ -37,9 +37,8 @@ This repository contains two main backend services:
 - Node.js 18+ and npm
 - Redis server (local or cloud)
 - Supabase account and project
-- Mistral AI API key
+- Ollama (for local Llama 4 and Qwen models) or API keys for cloud providers
 - Pinecone API key (optional)
-- Deepseek API key (optional)
 
 ### Installation
 
@@ -93,13 +92,15 @@ SUPABASE_URL=your_supabase_url
 SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 
-# Mistral AI
-MISTRAL_API_KEY=your_mistral_api_key
-MISTRAL_API_URL=https://api.mistral.ai/v1
+# Llama 4 (Local Ollama or Cloud)
+LLAMA_API_KEY=ollama
+LLAMA_API_URL=http://localhost:11434/v1
+LLAMA_MODEL=llama3.2:latest
 
-# Deepseek (optional)
-DEEPSEEK_API_KEY=your_deepseek_api_key
-DEEPSEEK_API_URL=https://api.deepseek.com/v1
+# Qwen Instruct (Local Ollama or Cloud)
+QWEN_API_KEY=ollama
+QWEN_API_URL=http://localhost:11434/v1
+QWEN_MODEL=qwen2.5:latest
 
 # Pinecone (optional)
 PINECONE_API_KEY=your_pinecone_api_key
@@ -167,8 +168,8 @@ testlattice-backend/
     │   │   ├── playwright.ts # Web test runner
     │   │   └── appium.ts    # Mobile test runner
     │   ├── services/        # External services
-    │   │   ├── mistral.ts   # Mistral AI integration
-    │   │   ├── deepseek.ts  # Deepseek integration
+    │   │   ├── llama.ts     # Llama 4 integration
+    │   │   ├── qwen.ts      # Qwen Instruct integration
     │   │   ├── pinecone.ts  # Pinecone integration
     │   │   ├── storage.ts   # Supabase Storage
     │   │   └── comprehensiveTesting.ts # Comprehensive testing service

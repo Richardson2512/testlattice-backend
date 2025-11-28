@@ -6,21 +6,13 @@ let _supabase: SupabaseClient | null = null
 let _supabaseAnon: SupabaseClient | null = null
 
 function initializeSupabase(): SupabaseClient {
-  // Read directly from process.env to avoid config module caching issues
-  const supabaseUrl = process.env.SUPABASE_URL || config.supabase.url || ''
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || config.supabase.serviceRoleKey || ''
-  const anonKey = process.env.SUPABASE_KEY || config.supabase.key || ''
+  // Use config which validates env vars at startup
+  const supabaseUrl = config.supabase.url
+  const serviceRoleKey = config.supabase.serviceRoleKey
+  const anonKey = config.supabase.key
   
-  // Validate Supabase configuration
-  if (!supabaseUrl) {
-    throw new Error('SUPABASE_URL environment variable is required. Please set it in api/.env file.')
-  }
-
-  if (!serviceRoleKey && !anonKey) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY environment variable is required. Please set it in api/.env file.')
-  }
-
   // Create Supabase client with service role key for admin operations
+  // Prefer service role key, fallback to anon key if service role not available
   return createClient(
     supabaseUrl,
     serviceRoleKey || anonKey,
@@ -34,19 +26,10 @@ function initializeSupabase(): SupabaseClient {
 }
 
 function initializeSupabaseAnon(): SupabaseClient {
-  // Read directly from process.env to avoid config module caching issues
-  const supabaseUrl = process.env.SUPABASE_URL || config.supabase.url || ''
-  const anonKey = process.env.SUPABASE_KEY || config.supabase.key || ''
+  // Use config which validates env vars at startup
+  const supabaseUrl = config.supabase.url
+  const anonKey = config.supabase.key
   
-  // Validate Supabase configuration
-  if (!supabaseUrl) {
-    throw new Error('SUPABASE_URL environment variable is required. Please set it in api/.env file.')
-  }
-
-  if (!anonKey) {
-    throw new Error('SUPABASE_KEY environment variable is required. Please set it in api/.env file.')
-  }
-
   // Create Supabase client with anon key for user operations
   return createClient(
     supabaseUrl,

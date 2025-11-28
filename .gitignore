@@ -1,14 +1,20 @@
 # Dependencies
 node_modules/
+**/node_modules/
 /.pnp
 .pnp.js
 
 # Testing
 /coverage
+**/coverage
 
-# Production
+# Production outputs
 /build
 /dist
+**/build
+**/dist
+/.next/
+out/
 
 # Misc
 .DS_Store
@@ -20,9 +26,12 @@ yarn-debug.log*
 yarn-error.log*
 
 # Local env files
-.env*.local
 .env
 .env.local
+.env*.local
+**/.env
+**/.env.local
+**/.env*.local
 
 # IDE
 .vscode/
@@ -34,6 +43,8 @@ yarn-error.log*
 # Logs
 logs
 *.log
+**/logs
+**/*.log
 
 # OS
 Thumbs.db
@@ -54,3 +65,7 @@ api/dist/
 worker/.env
 worker/dist/
 worker/videos/
+worker/traces/
+*.zip.gz
+*.d.ts.map
+*.js.map

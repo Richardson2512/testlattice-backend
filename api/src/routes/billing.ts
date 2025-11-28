@@ -30,7 +30,11 @@ export async function billingRoutes(fastify: FastifyInstance) {
   // Get subscription info (mocked - replace with real Stripe integration when needed)
   fastify.get('/subscription', async (request, reply) => {
     try {
-      // TODO: Replace with real subscription data from Stripe
+      // NOTE: Currently using mock subscription data
+      // To implement real Stripe integration:
+      // 1. Install @stripe/stripe-js package
+      // 2. Initialize Stripe client with STRIPE_SECRET_KEY
+      // 3. Use stripe.subscriptions.retrieve() to get real subscription data
       // Mock subscription data for development
       const subscription = {
         id: 'sub_mock_123',
@@ -66,7 +70,11 @@ export async function billingRoutes(fastify: FastifyInstance) {
     try {
       const { priceId, successUrl, cancelUrl } = request.body as any
 
-      // TODO: Replace with real Stripe checkout session creation
+      // NOTE: Currently using mock checkout session
+      // To implement real Stripe integration:
+      // 1. Install @stripe/stripe-js package
+      // 2. Initialize Stripe client with STRIPE_SECRET_KEY
+      // 3. Use stripe.checkout.sessions.create() to create real checkout session
       // Mock checkout session for development
       const appUrl = config.appUrl || process.env.APP_URL || 'http://localhost:3000'
       const session = {
@@ -87,7 +95,12 @@ export async function billingRoutes(fastify: FastifyInstance) {
   // Stripe webhook handler
   fastify.post('/webhook', async (request, reply) => {
     try {
-      // TODO: Verify Stripe webhook signature
+      // SECURITY: Webhook signature verification should be implemented
+      // To implement:
+      // 1. Get webhook secret from STRIPE_WEBHOOK_SECRET env var
+      // 2. Get signature from request.headers['stripe-signature']
+      // 3. Use stripe.webhooks.constructEvent() to verify signature
+      // 4. Reject request if signature is invalid
       const payload = request.body as any
 
       fastify.log.info('Stripe webhook received:', payload.type)
