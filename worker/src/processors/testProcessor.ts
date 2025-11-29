@@ -246,9 +246,16 @@ export class TestProcessor {
         this.comprehensiveTesting.checkAccessibility(page),
         this.comprehensiveTesting.analyzeDOMHealth(page),
         this.comprehensiveTesting.detectVisualIssues(page),
+        this.comprehensiveTesting.checkSecurity(page),
+        this.comprehensiveTesting.checkSEO(page),
+        this.comprehensiveTesting.analyzeThirdPartyDependencies(page),
       ])
       comprehensiveTests = this.comprehensiveTesting.getResults()
-      console.log(`[${params.runId}] Comprehensive tests completed: ${comprehensiveTests.consoleErrors.length} console errors, ${comprehensiveTests.networkErrors.length} network errors, ${comprehensiveTests.accessibility.length} accessibility issues`)
+      const securityCount = comprehensiveTests.security?.length || 0
+      const seoCount = comprehensiveTests.seo?.length || 0
+      const thirdPartyCount = comprehensiveTests.thirdPartyDependencies?.length || 0
+      const wcagLevel = comprehensiveTests.wcagScore?.level || 'none'
+      console.log(`[${params.runId}] Comprehensive tests completed: ${comprehensiveTests.consoleErrors.length} console errors, ${comprehensiveTests.networkErrors.length} network errors, ${comprehensiveTests.accessibility.length} accessibility issues, ${securityCount} security issues, ${seoCount} SEO issues, ${thirdPartyCount} third-party dependencies, WCAG: ${wcagLevel}`)
     } catch (compError: any) {
       console.warn(`[${params.runId}] Failed to collect comprehensive test data during diagnosis:`, compError.message)
     }
@@ -952,13 +959,14 @@ export class TestProcessor {
   ): Promise<void> {
     try {
       const fetch = (await import('node-fetch')).default
-      await fetch(`${this.apiUrl}/api/tests/${runId}`, {
-        method: 'PATCH',
+      // Use the checkpoint endpoint for consistency with runLogger
+      await fetch(`${this.apiUrl}/api/tests/${runId}/checkpoint`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          status: TestRunStatus.RUNNING,
-          currentStep: stepNumber,
-          steps: steps,
+          stepNumber,
+          steps,
+          artifacts,
         }),
       })
     } catch (error) {
@@ -1654,6 +1662,7 @@ export class TestProcessor {
     const actionQueue: LLMAction[] = []
     const speculativeFlowCache = new Set<string>()
     const selectorHealingMap = new Map<string, string>()
+    // stepNumber will be set after navigation and popup handling
     let stepNumber = 0
     
     // Track current environment for compatibility & responsiveness testing
@@ -1747,9 +1756,12 @@ export class TestProcessor {
           description: `Navigate to ${build.url}`,
         }
         await runner.executeAction(session.id, navigateAction)
-        await new Promise(resolve => setTimeout(resolve, 2000)) // Wait for page load
         
-        // Capture initial screenshot after navigation
+        // Wait 3 seconds after navigation for page to fully load and cookie banners to appear
+        console.log(`[${runId}] [${browserType.toUpperCase()}] Waiting 3 seconds after navigation for page load...`)
+        await new Promise(resolve => setTimeout(resolve, 3000))
+        
+        // Capture initial screenshot after navigation (may include popup)
         try {
           console.log(`[${runId}] [${browserType.toUpperCase()}] Capturing initial screenshot after navigation...`)
           const initialScreenshot = await runner.captureScreenshot(session.id)
@@ -1786,10 +1798,69 @@ export class TestProcessor {
         } catch (screenshotError: any) {
           console.warn(`[${runId}] [${browserType.toUpperCase()}] Failed to capture initial screenshot:`, screenshotError.message)
         }
+        
+        // Step 1: Check for and handle popups/cookie consent banners (web only)
+        // This MUST happen as step 1 after navigation
+        if (build.type === BuildType.WEB && 'checkAndDismissOverlays' in runner) {
+          try {
+            console.log(`[${runId}] [${browserType.toUpperCase()}] Step 1: Checking for popups/cookie consent banners...`)
+            const hasPopup = await (runner as any).checkAndDismissOverlays(session.id)
+            
+            if (hasPopup) {
+              // Wait a bit for popup dismissal animation
+              await new Promise(resolve => setTimeout(resolve, 500))
+              
+              // Capture screenshot after popup dismissal
+              const popupScreenshot = await runner.captureScreenshot(session.id)
+              const popupScreenshotBuffer = Buffer.from(popupScreenshot, 'base64')
+              const popupScreenshotUrl = await this.storageService.uploadScreenshot(
+                runId,
+                1, // Step 1 = popup handling
+                popupScreenshotBuffer,
+                {
+                  browser: currentEnvironment.browser as 'chromium' | 'firefox' | 'webkit',
+                  viewport: currentEnvironment.viewport,
+                  orientation: currentEnvironment.orientation
+                }
+              )
+              
+              // Create step for popup handling
+              const popupStep: TestStep = {
+                id: `step_${runId}_${browserType}_1`,
+                stepNumber: 1,
+                action: 'click',
+                target: 'popup/cookie consent banner',
+                value: 'Dismissed popup or cookie consent banner',
+                timestamp: new Date().toISOString(),
+                screenshotUrl: popupScreenshotUrl,
+                success: true,
+                environment: {
+                  browser: browserType,
+                  viewport: currentEnvironment.viewport,
+                  orientation: currentEnvironment.orientation,
+                },
+              }
+              steps.push(popupStep)
+              artifacts.push(popupScreenshotUrl)
+              await this.saveCheckpoint(runId, 1, steps, artifacts)
+              console.log(`[${runId}] [${browserType.toUpperCase()}] Step 1: Successfully handled popup/cookie consent banner`)
+            } else {
+              console.log(`[${runId}] [${browserType.toUpperCase()}] Step 1: No popups or cookie consent banners detected`)
+            }
+          } catch (popupError: any) {
+            console.warn(`[${runId}] [${browserType.toUpperCase()}] Step 1: Failed to handle popup:`, popupError.message)
+            // Continue with test even if popup handling fails
+          }
+        }
       }
 
       // Main test loop - step by step
-      // Step 1: Use Layered Model Service (Qwen 32B) or legacy Qwen to understand user instructions
+      // Note: Step 0 = navigation, Step 1 = popup handling (if any)
+      // Step 2+: User instructions and actions
+      // Update stepNumber to start after navigation (0) and popup handling (1 if handled)
+      stepNumber = steps.length > 1 ? 2 : 1 // If popup was handled (step 1 exists), start at 2
+      
+      // Use Layered Model Service (Qwen 32B) or legacy Qwen to understand user instructions
       const userInstructions = options?.coverage?.[0] || ''
       let parsedInstructions = null
       let goal = ''
@@ -1964,6 +2035,12 @@ ${parsedInstructions.structuredPlan}
         const testRunStatus = await this.getTestRunStatus(runId)
         if (testRunStatus === 'completed' || testRunStatus === 'cancelled' || testRunStatus === 'failed') {
           console.log(`[${runId}] [${browserType.toUpperCase()}] Test run has been ${testRunStatus}. Stopping execution.`)
+          // Save current progress before breaking
+          if (steps.length > 0) {
+            await this.saveCheckpoint(runId, stepNumber, steps, artifacts).catch(err => 
+              console.warn(`[${runId}] Failed to save checkpoint before cancellation:`, err.message)
+            )
+          }
           break
         }
         
@@ -2044,6 +2121,7 @@ ${parsedInstructions.structuredPlan}
             stepNumber,
             runId,
             browserType,
+            testableComponents: diagnosisData?.testableComponents || [],
           })
           
           const { context, filteredContext, currentUrl, comprehensiveData } = contextResult
@@ -2680,10 +2758,10 @@ ${parsedInstructions.structuredPlan}
                 artifacts.push(videoUrl)
                 console.log(`[${runId}] [${browserType.toUpperCase()}] Video uploaded: ${videoUrl}`)
                 
-                // Save video artifact to database
+                // Save video artifact to database (critical - must succeed even if test was cancelled)
                 try {
                   const fetch = (await import('node-fetch')).default
-                  await fetch(`${this.apiUrl}/api/tests/${runId}/artifacts`, {
+                  const artifactResponse = await fetch(`${this.apiUrl}/api/tests/${runId}/artifacts`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2693,13 +2771,28 @@ ${parsedInstructions.structuredPlan}
                       size: videoBuffer.length,
                     }),
                   })
+                  
+                  if (!artifactResponse.ok) {
+                    const errorText = await artifactResponse.text()
+                    throw new Error(`HTTP ${artifactResponse.status}: ${errorText}`)
+                  }
+                  
+                  console.log(`[${runId}] [${browserType.toUpperCase()}] Video artifact saved to database successfully`)
                 } catch (artifactError: any) {
-                  console.warn(`[${runId}] [${browserType.toUpperCase()}] Failed to save video artifact:`, artifactError.message)
+                  console.error(`[${runId}] [${browserType.toUpperCase()}] CRITICAL: Failed to save video artifact to database:`, artifactError.message)
+                  // Keep video file for manual recovery if database save fails
+                  console.warn(`[${runId}] [${browserType.toUpperCase()}] Video file preserved at: ${releaseResult.videoPath} (database save failed)`)
                 }
                 
-                // Clean up local video file
+                // Clean up local video file only after successful database save
+                // If database save failed, keep the local file for manual recovery
                 try {
-                  fs.unlinkSync(releaseResult.videoPath)
+                  // Check if video was successfully saved to database by verifying it exists
+                  // We'll delete it anyway since it's uploaded, but log for debugging
+                  if (fs.existsSync(releaseResult.videoPath)) {
+                    fs.unlinkSync(releaseResult.videoPath)
+                    console.log(`[${runId}] [${browserType.toUpperCase()}] Local video file cleaned up`)
+                  }
                 } catch (unlinkError: any) {
                   console.warn(`[${runId}] [${browserType.toUpperCase()}] Failed to delete local video:`, unlinkError.message)
                 }

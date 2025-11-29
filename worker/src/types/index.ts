@@ -190,6 +190,7 @@ export interface LLMAction {
 }
 
 export interface VisionElement {
+  testability?: 'high' | 'medium' | 'low' // Added by context synthesizer based on diagnosis data
   type: string
   role?: string
   name?: string

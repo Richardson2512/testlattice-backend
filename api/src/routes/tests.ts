@@ -243,6 +243,33 @@ export async function testRoutes(fastify: FastifyInstance) {
     }
   })
 
+  // Save checkpoint (for worker to save steps incrementally)
+  fastify.post<{ 
+    Params: { runId: string }
+    Body: { stepNumber: number; steps: any[]; artifacts: string[] }
+  }>('/:runId/checkpoint', async (request, reply) => {
+    try {
+      const { runId } = request.params
+      const { stepNumber, steps, artifacts } = request.body
+      
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      // Update test run with new steps and current step number
+      const updated = await Database.updateTestRun(runId, {
+        steps: steps,
+        currentStep: stepNumber,
+      })
+
+      return reply.send({ success: true, testRun: updated })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to save checkpoint' })
+    }
+  })
+
   // Pause test run (no auth required - viewing test implies access)
   fastify.post<{ Params: { runId: string } }>('/:runId/pause', async (request, reply) => {
     try {

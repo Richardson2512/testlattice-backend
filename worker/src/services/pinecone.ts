@@ -177,7 +177,7 @@ export class PineconeService {
           timestamp: new Date().toISOString(),
           type: 'test_trace',
         }
-      )
+      })
 
       // Batch upsert using integrated embeddings (max 96 records per batch for text)
       if (records.length > 0) {

@@ -42,6 +42,20 @@ export interface PerformanceMetrics {
     bestPractices: number
     seo: number
   }
+  // Core Web Vitals
+  largestContentfulPaint?: number
+  firstInputDelay?: number
+  cumulativeLayoutShift?: number
+  timeToInteractive?: number
+  totalBlockingTime?: number
+  // Resource analysis
+  slowResources?: Array<{
+    url: string
+    loadTime: number
+    size: number
+    type: string
+  }>
+  duplicateScripts?: string[]
 }
 
 export interface AccessibilityIssue {
@@ -93,6 +107,33 @@ export interface DOMHealth {
   jsErrors: ConsoleError[]
 }
 
+export interface SecurityIssue {
+  type: 'xss' | 'csp' | 'insecure-resource' | 'missing-https' | 'mixed-content' | 'csrf' | 'cookies'
+  severity: 'high' | 'medium' | 'low'
+  message: string
+  element?: string
+  selector?: string
+  url?: string
+  fix?: string
+}
+
+export interface SEOIssue {
+  type: 'missing-meta' | 'invalid-meta' | 'missing-structured-data' | 'duplicate-title' | 'missing-canonical'
+  severity: 'high' | 'medium' | 'low'
+  message: string
+  element?: string
+  fix?: string
+}
+
+export interface ThirdPartyDependency {
+  domain: string
+  type: 'analytics' | 'advertising' | 'cdn' | 'widget' | 'social' | 'payment' | 'unknown'
+  scripts: string[]
+  cookies?: string[]
+  privacyRisk: 'high' | 'medium' | 'low'
+  description: string
+}
+
 export interface ComprehensiveTestResults {
   consoleErrors: ConsoleError[]
   networkErrors: NetworkError[]
@@ -100,6 +141,16 @@ export interface ComprehensiveTestResults {
   accessibility: AccessibilityIssue[]
   visualIssues: VisualIssue[]
   domHealth: DOMHealth
+  security?: SecurityIssue[]
+  seo?: SEOIssue[]
+  thirdPartyDependencies?: ThirdPartyDependency[]
+  wcagScore?: {
+    level: 'A' | 'AA' | 'AAA' | 'none'
+    score: number // 0-100
+    passed: number
+    failed: number
+    warnings: number
+  }
 }
 
 export class ComprehensiveTestingService {
@@ -111,6 +162,10 @@ export class ComprehensiveTestingService {
   private domHealthData: DOMHealth | null = null
   private designSpec: DesignSpec | null = null
   private visionValidator: VisionValidatorService | null = null
+  private securityIssues: SecurityIssue[] = []
+  private seoIssues: SEOIssue[] = []
+  private thirdPartyDependencies: ThirdPartyDependency[] = []
+  private wcagScore: { level: 'A' | 'AA' | 'AAA' | 'none'; score: number; passed: number; failed: number; warnings: number } | null = null
 
   /**
    * Initialize comprehensive testing on a page
@@ -186,7 +241,7 @@ export class ComprehensiveTestingService {
   }
 
   /**
-   * Collect performance metrics
+   * Collect performance metrics including Core Web Vitals
    */
   async collectPerformanceMetrics(page: Page): Promise<PerformanceMetrics> {
     const metrics = await page.evaluate(() => {
@@ -194,20 +249,84 @@ export class ComprehensiveTestingService {
       const paint = performance.getEntriesByType('paint')
       const fcp = paint.find((entry) => entry.name === 'first-contentful-paint')
       
-      // Calculate resource sizes
+      // Calculate resource sizes and identify slow resources
       const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[]
       let totalSize = 0
       let jsSize = 0
       let cssSize = 0
       let imageSize = 0
+      const slowResources: Array<{ url: string; loadTime: number; size: number; type: string }> = []
+      const scriptUrls = new Set<string>()
       
       resources.forEach((resource) => {
         const size = resource.transferSize || 0
+        const loadTime = resource.responseEnd - resource.requestStart
         totalSize += size
-        if (resource.name.includes('.js')) jsSize += size
-        else if (resource.name.includes('.css')) cssSize += size
-        else if (resource.name.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)) imageSize += size
+        
+        if (resource.name.includes('.js')) {
+          jsSize += size
+          scriptUrls.add(resource.name)
+        } else if (resource.name.includes('.css')) {
+          cssSize += size
+        } else if (resource.name.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)) {
+          imageSize += size
+        }
+        
+        // Flag slow resources (>1s load time or >500KB)
+        if (loadTime > 1000 || size > 500000) {
+          slowResources.push({
+            url: resource.name,
+            loadTime: Math.round(loadTime),
+            size: size,
+            type: resource.initiatorType || 'unknown'
+          })
+        }
       })
+
+      // Detect duplicate scripts (same filename, different paths)
+      const scriptNames = Array.from(scriptUrls).map(url => {
+        const match = url.match(/\/([^\/]+\.js)/)
+        return match ? match[1] : null
+      }).filter(Boolean) as string[]
+      const duplicateScripts = scriptNames.filter((name, index) => scriptNames.indexOf(name) !== index)
+
+      // Core Web Vitals
+      let lcp: number | undefined
+      let fid: number | undefined
+      let cls: number | undefined
+      let tti: number | undefined
+      let tbt: number | undefined
+
+      // Largest Contentful Paint
+      const lcpEntries = performance.getEntriesByType('largest-contentful-paint')
+      if (lcpEntries.length > 0) {
+        lcp = (lcpEntries[lcpEntries.length - 1] as any).renderTime || (lcpEntries[lcpEntries.length - 1] as any).loadTime
+      }
+
+      // First Input Delay (simplified - would need user interaction)
+      const fidEntries = performance.getEntriesByType('first-input')
+      if (fidEntries.length > 0) {
+        fid = (fidEntries[0] as any).processingStart - (fidEntries[0] as any).startTime
+      }
+
+      // Cumulative Layout Shift
+      let clsValue = 0
+      const clsEntries = performance.getEntriesByType('layout-shift')
+      clsEntries.forEach((entry: any) => {
+        if (!entry.hadRecentInput) {
+          clsValue += entry.value
+        }
+      })
+      cls = clsValue
+
+      // Time to Interactive (simplified calculation)
+      tti = navigation.domInteractive - navigation.fetchStart
+
+      // Total Blocking Time (simplified - sum of long tasks)
+      const longTasks = performance.getEntriesByType('longtask')
+      tbt = longTasks.reduce((sum, task: any) => {
+        return sum + (task.duration > 50 ? task.duration - 50 : 0)
+      }, 0)
 
       return {
         pageLoadTime: navigation.loadEventEnd - navigation.fetchStart,
@@ -217,6 +336,13 @@ export class ComprehensiveTestingService {
         jsBundleSize: jsSize,
         cssSize: cssSize,
         imageSize: imageSize,
+        largestContentfulPaint: lcp,
+        firstInputDelay: fid,
+        cumulativeLayoutShift: cls,
+        timeToInteractive: tti,
+        totalBlockingTime: tbt,
+        slowResources: slowResources.slice(0, 10), // Top 10 slow resources
+        duplicateScripts: Array.from(new Set(duplicateScripts))
       }
     })
 
@@ -276,36 +402,104 @@ export class ComprehensiveTestingService {
       })
     })
 
-    // Check for contrast issues (basic check)
+    // Check for contrast issues with WCAG-compliant calculation
     const contrastIssues = await page.evaluate(() => {
-      const issues: Array<{ selector: string; element: string; text: string }> = []
-      const textElements = document.querySelectorAll('p, span, div, h1, h2, h3, h4, h5, h6, a, button, label')
+      // Helper function to convert RGB to relative luminance
+      const getLuminance = (r: number, g: number, b: number): number => {
+        const [rs, gs, bs] = [r, g, b].map(val => {
+          val = val / 255
+          return val <= 0.03928 ? val / 12.92 : Math.pow((val + 0.055) / 1.055, 2.4)
+        })
+        return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs
+      }
+
+      // Helper function to parse color string to RGB
+      const parseColor = (colorStr: string): [number, number, number] | null => {
+        // Handle rgb/rgba
+        const rgbMatch = colorStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+        if (rgbMatch) {
+          return [parseInt(rgbMatch[1]), parseInt(rgbMatch[2]), parseInt(rgbMatch[3])]
+        }
+        // Handle hex
+        const hexMatch = colorStr.match(/#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i)
+        if (hexMatch) {
+          return [parseInt(hexMatch[1], 16), parseInt(hexMatch[2], 16), parseInt(hexMatch[3], 16)]
+        }
+        return null
+      }
+
+      // Calculate contrast ratio
+      const getContrastRatio = (lum1: number, lum2: number): number => {
+        const lighter = Math.max(lum1, lum2)
+        const darker = Math.min(lum1, lum2)
+        return (lighter + 0.05) / (darker + 0.05)
+      }
+
+      const issues: Array<{ 
+        selector: string
+        element: string
+        text: string
+        contrastRatio: number
+        wcagLevel: 'AA' | 'AAA' | 'fail'
+      }> = []
+      const textElements = document.querySelectorAll('p, span, div, h1, h2, h3, h4, h5, h6, a, button, label, input, textarea')
       
       textElements.forEach((el) => {
+        const text = el.textContent?.trim()
+        if (!text || text.length === 0) return
+
         const style = window.getComputedStyle(el)
-        const color = style.color
-        const bgColor = style.backgroundColor
-        
-        // Basic check - if text color and background are too similar, flag it
-        // This is a simplified check - real contrast checking would use WCAG formulas
-        if (color === bgColor || (color.includes('rgb') && bgColor.includes('rgb') && color === bgColor)) {
-          let selector = ''
-          if (el.id) selector = `#${el.id}`
-          else if (el.className) {
-            // Handle SVG elements (className can be SVGAnimatedString) and null cases
-            const className = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')
-            if (className && typeof className === 'string') {
-              selector = `.${className.split(' ')[0]}`
-            } else {
-              selector = el.tagName.toLowerCase()
-            }
-          } else selector = el.tagName.toLowerCase()
-          
-          issues.push({
-            selector,
-            element: el.tagName.toLowerCase(),
-            text: el.textContent?.substring(0, 50) || '',
-          })
+        const colorStr = style.color
+        let bgColorStr = style.backgroundColor
+
+        // Get background color from parent if transparent
+        if (bgColorStr === 'rgba(0, 0, 0, 0)' || bgColorStr === 'transparent') {
+          let parent = el.parentElement
+          while (parent && (bgColorStr === 'rgba(0, 0, 0, 0)' || bgColorStr === 'transparent')) {
+            const parentStyle = window.getComputedStyle(parent)
+            bgColorStr = parentStyle.backgroundColor
+            parent = parent.parentElement
+          }
+        }
+
+        const fgColor = parseColor(colorStr)
+        const bgColor = parseColor(bgColorStr)
+
+        if (fgColor && bgColor) {
+          const fgLum = getLuminance(fgColor[0], fgColor[1], fgColor[2])
+          const bgLum = getLuminance(bgColor[0], bgColor[1], bgColor[2])
+          const contrastRatio = getContrastRatio(fgLum, bgLum)
+
+          // WCAG AA: 4.5:1 for normal text, 3:1 for large text
+          // WCAG AAA: 7:1 for normal text, 4.5:1 for large text
+          const fontSize = parseFloat(style.fontSize)
+          const isLargeText = fontSize >= 18 || (fontSize >= 14 && (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700))
+          const minRatio = isLargeText ? 3 : 4.5
+
+          let wcagLevel: 'AA' | 'AAA' | 'fail' = 'fail'
+          if (contrastRatio >= 7) wcagLevel = 'AAA'
+          else if (contrastRatio >= minRatio) wcagLevel = 'AA'
+
+          if (contrastRatio < minRatio) {
+            let selector = ''
+            if (el.id) selector = `#${el.id}`
+            else if (el.className) {
+              const className = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')
+              if (className && typeof className === 'string') {
+                selector = `.${className.split(' ')[0]}`
+              } else {
+                selector = el.tagName.toLowerCase()
+              }
+            } else selector = el.tagName.toLowerCase()
+            
+            issues.push({
+              selector,
+              element: el.tagName.toLowerCase(),
+              text: text.substring(0, 50),
+              contrastRatio: Math.round(contrastRatio * 100) / 100,
+              wcagLevel
+            })
+          }
         }
       })
       
@@ -313,16 +507,41 @@ export class ComprehensiveTestingService {
     })
 
     contrastIssues.forEach((item) => {
+      const isCritical = item.contrastRatio < 3
       issues.push({
         id: `contrast-${Date.now()}-${Math.random()}`,
-        type: 'warning',
-        message: `Possible contrast issue: text color may be too similar to background`,
+        type: isCritical ? 'error' : 'warning',
+        message: `WCAG ${item.wcagLevel === 'fail' ? 'FAIL' : item.wcagLevel} contrast violation: ratio ${item.contrastRatio}:1 (minimum required: ${item.wcagLevel === 'AAA' ? '7:1' : '4.5:1'})`,
         element: item.element,
         selector: item.selector,
-        impact: 'moderate',
-        fix: `Ensure text color has sufficient contrast with background for ${item.selector}`,
+        impact: isCritical ? 'serious' : 'moderate',
+        fix: `Increase contrast ratio to at least 4.5:1 (AA) or 7:1 (AAA) for ${item.selector}. Current ratio: ${item.contrastRatio}:1`,
       })
     })
+
+    // Calculate WCAG compliance score
+    const totalChecks = issues.length + (missingAriaLabels.length > 0 ? 1 : 0) + (contrastIssues.length > 0 ? 1 : 0) + (keyboardIssues.length > 0 ? 1 : 0)
+    const criticalIssues = issues.filter(i => i.impact === 'critical' || i.impact === 'serious').length
+    const warnings = issues.filter(i => i.type === 'warning').length
+    const passed = totalChecks - criticalIssues - warnings
+    
+    let wcagLevel: 'A' | 'AA' | 'AAA' | 'none' = 'none'
+    if (criticalIssues === 0 && warnings < totalChecks * 0.1) {
+      wcagLevel = 'AAA'
+    } else if (criticalIssues === 0 && warnings < totalChecks * 0.2) {
+      wcagLevel = 'AA'
+    } else if (criticalIssues < totalChecks * 0.1) {
+      wcagLevel = 'A'
+    }
+
+    const score = totalChecks > 0 ? Math.round((passed / totalChecks) * 100) : 100
+    this.wcagScore = {
+      level: wcagLevel,
+      score,
+      passed,
+      failed: criticalIssues,
+      warnings
+    }
 
     // Check for keyboard navigation issues (elements that should be focusable but aren't)
     const keyboardIssues = await page.evaluate(() => {
@@ -1444,6 +1663,359 @@ export class ComprehensiveTestingService {
   }
 
   /**
+   * Check security issues
+   */
+  async checkSecurity(page: Page): Promise<SecurityIssue[]> {
+    const issues: SecurityIssue[] = []
+
+    // Check for CSP (Content Security Policy)
+    const cspHeader = await page.evaluate(() => {
+      // Check meta tag CSP
+      const metaCSP = document.querySelector('meta[http-equiv="Content-Security-Policy"]')
+      return metaCSP ? (metaCSP as HTMLMetaElement).content : null
+    })
+
+    if (!cspHeader) {
+      issues.push({
+        type: 'csp',
+        severity: 'medium',
+        message: 'Missing Content Security Policy (CSP) header',
+        fix: 'Add CSP header or meta tag to prevent XSS attacks'
+      })
+    }
+
+    // Check for insecure resources (HTTP on HTTPS page)
+    const insecureResources = await page.evaluate(() => {
+      const issues: Array<{ url: string; type: string }> = []
+      const currentProtocol = window.location.protocol
+
+      if (currentProtocol === 'https:') {
+        // Check all external resources
+        const scripts = Array.from(document.querySelectorAll('script[src]'))
+        const links = Array.from(document.querySelectorAll('link[href]'))
+        const images = Array.from(document.querySelectorAll('img[src]'))
+        const iframes = Array.from(document.querySelectorAll('iframe[src]'))
+
+        const checkUrl = (url: string, type: string) => {
+          if (url && url.startsWith('http://')) {
+            issues.push({ url, type })
+          }
+        }
+
+        scripts.forEach(s => checkUrl((s as HTMLScriptElement).src, 'script'))
+        links.forEach(l => checkUrl((l as HTMLLinkElement).href, 'link'))
+        images.forEach(i => checkUrl((i as HTMLImageElement).src, 'image'))
+        iframes.forEach(i => checkUrl((i as HTMLIFrameElement).src, 'iframe'))
+      }
+
+      return issues
+    })
+
+    insecureResources.forEach(item => {
+      issues.push({
+        type: 'insecure-resource',
+        severity: 'high',
+        message: `Insecure HTTP resource loaded on HTTPS page: ${item.url}`,
+        url: item.url,
+        fix: `Change ${item.url} to use HTTPS protocol`
+      })
+    })
+
+    // Check for potential XSS vectors (innerHTML usage with user input)
+    const xssVectors = await page.evaluate(() => {
+      const issues: Array<{ selector: string; element: string }> = []
+      // This is a simplified check - real XSS detection would need runtime analysis
+      const scripts = Array.from(document.querySelectorAll('script'))
+      scripts.forEach(script => {
+        const content = script.textContent || ''
+        // Check for dangerous patterns (simplified)
+        if (content.includes('innerHTML') && (content.includes('location') || content.includes('document.cookie'))) {
+          let selector = ''
+          if (script.id) selector = `#${script.id}`
+          else if (script.className) {
+            const className = typeof script.className === 'string' ? script.className : ''
+            if (className) selector = `.${className.split(' ')[0]}`
+          } else selector = 'script'
+          issues.push({ selector, element: 'script' })
+        }
+      })
+      return issues
+    })
+
+    xssVectors.forEach(item => {
+      issues.push({
+        type: 'xss',
+        severity: 'high',
+        message: `Potential XSS vulnerability detected in ${item.selector}`,
+        element: item.element,
+        selector: item.selector,
+        fix: `Avoid using innerHTML with user input. Use textContent or proper sanitization.`
+      })
+    })
+
+    // Check for CSRF tokens in forms
+    const formsWithoutCSRF = await page.evaluate(() => {
+      const issues: Array<{ selector: string }> = []
+      const forms = Array.from(document.querySelectorAll('form[method="post"]'))
+      forms.forEach(form => {
+        const hasToken = form.querySelector('input[name*="csrf"], input[name*="token"], input[name*="_token"]')
+        if (!hasToken) {
+          let selector = ''
+          if (form.id) selector = `#${form.id}`
+          else if (form.className) {
+            const className = typeof form.className === 'string' ? form.className : ''
+            if (className) selector = `.${className.split(' ')[0]}`
+          } else selector = 'form'
+          issues.push({ selector })
+        }
+      })
+      return issues
+    })
+
+    formsWithoutCSRF.forEach(item => {
+      issues.push({
+        type: 'csrf',
+        severity: 'medium',
+        message: `Form ${item.selector} may be vulnerable to CSRF attacks`,
+        selector: item.selector,
+        fix: `Add CSRF token to form ${item.selector}`
+      })
+    })
+
+    this.securityIssues = issues
+    return issues
+  }
+
+  /**
+   * Check SEO issues
+   */
+  async checkSEO(page: Page): Promise<SEOIssue[]> {
+    const issues: SEOIssue[] = []
+
+    const seoData = await page.evaluate(() => {
+      const data: {
+        title?: string
+        description?: string
+        canonical?: string
+        ogTitle?: string
+        ogDescription?: string
+        structuredData?: boolean
+      } = {}
+
+      // Check title
+      data.title = document.title
+
+      // Check meta description
+      const metaDesc = document.querySelector('meta[name="description"]')
+      data.description = metaDesc ? (metaDesc as HTMLMetaElement).content : undefined
+
+      // Check canonical URL
+      const canonical = document.querySelector('link[rel="canonical"]')
+      data.canonical = canonical ? (canonical as HTMLLinkElement).href : undefined
+
+      // Check Open Graph tags
+      const ogTitle = document.querySelector('meta[property="og:title"]')
+      data.ogTitle = ogTitle ? (ogTitle as HTMLMetaElement).content : undefined
+
+      const ogDesc = document.querySelector('meta[property="og:description"]')
+      data.ogDescription = ogDesc ? (ogDesc as HTMLMetaElement).content : undefined
+
+      // Check for structured data
+      const structuredData = document.querySelector('script[type="application/ld+json"]')
+      data.structuredData = !!structuredData
+
+      return data
+    })
+
+    // Check for missing title
+    if (!seoData.title || seoData.title.trim().length === 0) {
+      issues.push({
+        type: 'missing-meta',
+        severity: 'high',
+        message: 'Missing page title',
+        fix: 'Add a descriptive <title> tag'
+      })
+    } else if (seoData.title.length > 60) {
+      issues.push({
+        type: 'invalid-meta',
+        severity: 'medium',
+        message: `Title is too long (${seoData.title.length} characters, recommended: 50-60)`,
+        fix: 'Shorten the title to 50-60 characters for better SEO'
+      })
+    }
+
+    // Check for missing meta description
+    if (!seoData.description || seoData.description.trim().length === 0) {
+      issues.push({
+        type: 'missing-meta',
+        severity: 'high',
+        message: 'Missing meta description',
+        fix: 'Add a meta description tag: <meta name="description" content="...">'
+      })
+    } else if (seoData.description.length > 160) {
+      issues.push({
+        type: 'invalid-meta',
+        severity: 'medium',
+        message: `Meta description is too long (${seoData.description.length} characters, recommended: 150-160)`,
+        fix: 'Shorten the meta description to 150-160 characters'
+      })
+    }
+
+    // Check for missing canonical URL
+    if (!seoData.canonical) {
+      issues.push({
+        type: 'missing-canonical',
+        severity: 'medium',
+        message: 'Missing canonical URL',
+        fix: 'Add canonical link: <link rel="canonical" href="...">'
+      })
+    }
+
+    // Check for missing structured data
+    if (!seoData.structuredData) {
+      issues.push({
+        type: 'missing-structured-data',
+        severity: 'low',
+        message: 'No structured data (JSON-LD) found',
+        fix: 'Add structured data using JSON-LD for better search engine understanding'
+      })
+    }
+
+    this.seoIssues = issues
+    return issues
+  }
+
+  /**
+   * Analyze third-party dependencies
+   */
+  async analyzeThirdPartyDependencies(page: Page): Promise<ThirdPartyDependency[]> {
+    const dependencies = await page.evaluate(() => {
+      const deps = new Map<string, {
+        scripts: string[]
+        cookies: string[]
+        type: 'analytics' | 'advertising' | 'cdn' | 'widget' | 'social' | 'payment' | 'unknown'
+      }>()
+
+      // Known third-party domains
+      const domainTypes: Record<string, 'analytics' | 'advertising' | 'cdn' | 'widget' | 'social' | 'payment'> = {
+        'google-analytics.com': 'analytics',
+        'googletagmanager.com': 'analytics',
+        'facebook.com': 'social',
+        'twitter.com': 'social',
+        'linkedin.com': 'social',
+        'instagram.com': 'social',
+        'youtube.com': 'social',
+        'doubleclick.net': 'advertising',
+        'amazon-adsystem.com': 'advertising',
+        'cdnjs.cloudflare.com': 'cdn',
+        'cdn.jsdelivr.net': 'cdn',
+        'unpkg.com': 'cdn',
+        'stripe.com': 'payment',
+        'paypal.com': 'payment',
+        'hotjar.com': 'analytics',
+        'mixpanel.com': 'analytics',
+        'segment.com': 'analytics',
+        'amplitude.com': 'analytics',
+      }
+
+      // Extract domain from URL
+      const getDomain = (url: string): string | null => {
+        try {
+          const urlObj = new URL(url.startsWith('//') ? `https:${url}` : url)
+          return urlObj.hostname.replace('www.', '')
+        } catch {
+          return null
+        }
+      }
+
+      // Check all scripts
+      const scripts = Array.from(document.querySelectorAll('script[src]'))
+      scripts.forEach(script => {
+        const src = (script as HTMLScriptElement).src
+        const domain = getDomain(src)
+        if (domain && domain !== window.location.hostname.replace('www.', '')) {
+          if (!deps.has(domain)) {
+            deps.set(domain, {
+              scripts: [],
+              cookies: [],
+              type: domainTypes[domain] || 'unknown'
+            })
+          }
+          deps.get(domain)!.scripts.push(src)
+        }
+      })
+
+      // Check all links (stylesheets, etc.)
+      const links = Array.from(document.querySelectorAll('link[href]'))
+      links.forEach(link => {
+        const href = (link as HTMLLinkElement).href
+        const domain = getDomain(href)
+        if (domain && domain !== window.location.hostname.replace('www.', '')) {
+          if (!deps.has(domain)) {
+            deps.set(domain, {
+              scripts: [],
+              cookies: [],
+              type: domainTypes[domain] || 'unknown'
+            })
+          }
+        }
+      })
+
+      // Check iframes
+      const iframes = Array.from(document.querySelectorAll('iframe[src]'))
+      iframes.forEach(iframe => {
+        const src = (iframe as HTMLIFrameElement).src
+        const domain = getDomain(src)
+        if (domain && domain !== window.location.hostname.replace('www.', '')) {
+          if (!deps.has(domain)) {
+            deps.set(domain, {
+              scripts: [],
+              cookies: [],
+              type: domainTypes[domain] || 'unknown'
+            })
+          }
+        }
+      })
+
+      return Array.from(deps.entries()).map(([domain, data]) => ({
+        domain,
+        ...data
+      }))
+    })
+
+    const thirdPartyDeps: ThirdPartyDependency[] = dependencies.map(dep => {
+      // Determine privacy risk
+      let privacyRisk: 'high' | 'medium' | 'low' = 'low'
+      if (dep.type === 'analytics' || dep.type === 'advertising') {
+        privacyRisk = 'high'
+      } else if (dep.type === 'social' || dep.type === 'payment') {
+        privacyRisk = 'medium'
+      }
+
+      const descriptions: Record<string, string> = {
+        analytics: 'Analytics and tracking service',
+        advertising: 'Advertising and marketing service',
+        cdn: 'Content delivery network',
+        widget: 'Third-party widget or embed',
+        social: 'Social media integration',
+        payment: 'Payment processing service',
+        unknown: 'Unknown third-party service'
+      }
+
+      return {
+        domain: dep.domain,
+        type: dep.type,
+        scripts: dep.scripts,
+        privacyRisk,
+        description: descriptions[dep.type] || 'Third-party dependency'
+      }
+    })
+
+    this.thirdPartyDependencies = thirdPartyDeps
+    return thirdPartyDeps
+  }
+
+  /**
    * Get all comprehensive test results
    */
   getResults(): ComprehensiveTestResults {
@@ -1462,6 +2034,10 @@ export class ComprehensiveTestingService {
         hiddenElements: [],
         jsErrors: [],
       },
+      security: this.securityIssues.length > 0 ? this.securityIssues : undefined,
+      seo: this.seoIssues.length > 0 ? this.seoIssues : undefined,
+      thirdPartyDependencies: this.thirdPartyDependencies.length > 0 ? this.thirdPartyDependencies : undefined,
+      wcagScore: this.wcagScore || undefined,
     }
   }
 
@@ -1475,6 +2051,10 @@ export class ComprehensiveTestingService {
     this.accessibilityIssues = []
     this.visualIssues = []
     this.domHealthData = null
+    this.securityIssues = []
+    this.seoIssues = []
+    this.thirdPartyDependencies = []
+    this.wcagScore = null
   }
 }
 

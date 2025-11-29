@@ -1,5 +1,5 @@
 // ContextSynthesizer: Prepares VisionContext and trackingInfo for LLM
-import { VisionContext, VisionElement, TestOptions } from '../types'
+import { VisionContext, VisionElement, TestOptions, DiagnosisComponentInsight } from '../types'
 import { LlamaService } from '../services/llama'
 import { ComprehensiveTestingService, ComprehensiveTestResults } from '../services/comprehensiveTesting'
 import { Page } from 'playwright'
@@ -19,6 +19,7 @@ export interface SynthesizeContextParams {
   stepNumber: number
   runId: string
   browserType: 'chromium' | 'firefox' | 'webkit'
+  testableComponents?: DiagnosisComponentInsight[] // Components identified as testable during diagnosis
 }
 
 export interface SynthesizeContextResult {
@@ -125,64 +126,123 @@ export class ContextSynthesizer {
       : playwrightRunner.getCurrentUrl(sessionId).catch(() => ''))
     visitedUrls.add(currentUrl)
 
+    // Build testability map from diagnosis data
+    const testabilityMap = new Map<string, 'high' | 'medium' | 'low'>()
+    if (params.testableComponents) {
+      params.testableComponents.forEach(comp => {
+        if (comp.selector) {
+          testabilityMap.set(comp.selector, comp.testability)
+        }
+      })
+    }
+
+    // Helper to check if selector matches a testable component (fuzzy match)
+    const getTestability = (selector?: string): 'high' | 'medium' | 'low' | null => {
+      if (!selector) return null
+      
+      // Exact match
+      if (testabilityMap.has(selector)) {
+        return testabilityMap.get(selector)!
+      }
+      
+      // Partial match (e.g., if testable component is ".btn-primary" and element is ".btn-primary.active")
+      for (const [testableSelector, testability] of testabilityMap.entries()) {
+        if (selector.includes(testableSelector) || testableSelector.includes(selector)) {
+          return testability
+        }
+      }
+      
+      return null
+    }
+
     // Filter out already visited elements and non-navigational elements
-    const filteredElements = context.elements.filter((e: VisionElement) => {
-      // Skip if selector already visited
-      if (e.selector && visitedSelectors.has(e.selector)) {
-        return false
-      }
+    // Also prioritize high testability components
+    const filteredElements = context.elements
+      .filter((e: VisionElement) => {
+        // Skip if selector already visited
+        if (e.selector && visitedSelectors.has(e.selector)) {
+          return false
+        }
 
-      // Skip selectors explicitly blocked by diagnosis/runtime
-      if (e.selector && isSelectorBlocked(e.selector)) {
-        return false
-      }
+        // Skip selectors explicitly blocked by diagnosis/runtime
+        if (e.selector && isSelectorBlocked(e.selector)) {
+          return false
+        }
 
-      // Skip email and phone links (they're not navigational)
-      if (e.href && (e.href.startsWith('mailto:') || e.href.startsWith('tel:'))) {
-        return false
-      }
+        // Skip email and phone links (they're not navigational)
+        if (e.href && (e.href.startsWith('mailto:') || e.href.startsWith('tel:'))) {
+          return false
+        }
 
-      // Skip anchor links (skip links, same-page anchors) - not useful for automation
-      if (e.href && e.href.startsWith('#')) {
-        return false
-      }
+        // Skip anchor links (skip links, same-page anchors) - not useful for automation
+        if (e.href && e.href.startsWith('#')) {
+          return false
+        }
 
-      // Skip if href already visited
-      if (e.href && visitedHrefs.has(e.href)) {
-        return false
-      }
+        // Skip if href already visited
+        if (e.href && visitedHrefs.has(e.href)) {
+          return false
+        }
 
-      // Skip screen-reader-only elements and skip links
-      const selector = (e.selector || '').toLowerCase()
-      const className = (e.className || '').toLowerCase()
-      const text = (e.text || '').toLowerCase()
+        // Skip screen-reader-only elements and skip links
+        const selector = (e.selector || '').toLowerCase()
+        const className = (e.className || '').toLowerCase()
+        const text = (e.text || '').toLowerCase()
 
-      // Skip elements with screen-reader-only classes
-      if (className.includes('skip-link') ||
-          className.includes('screen-reader-text') ||
-          className.includes('sr-only') ||
-          className.includes('visually-hidden') ||
-          className.includes('sr-only-focusable')) {
-        return false
-      }
+        // Skip elements with screen-reader-only classes
+        if (className.includes('skip-link') ||
+            className.includes('screen-reader-text') ||
+            className.includes('sr-only') ||
+            className.includes('visually-hidden') ||
+            className.includes('sr-only-focusable')) {
+          return false
+        }
 
-      // Skip skip-link selectors
-      if (selector.includes('skip-link') || selector.includes('screen-reader')) {
-        return false
-      }
+        // Skip skip-link selectors
+        if (selector.includes('skip-link') || selector.includes('screen-reader')) {
+          return false
+        }
 
-      // Skip elements with "skip to" text (accessibility skip links)
-      if (text.includes('skip to') || text.includes('skip to content')) {
-        return false
-      }
+        // Skip elements with "skip to" text (accessibility skip links)
+        if (text.includes('skip to') || text.includes('skip to content')) {
+          return false
+        }
 
-      // Skip contact/support elements that are not navigation links
-      if ((text.includes('support@') || text.includes('contact@') || text.includes('+91') || text.includes('call to')) && !e.href) {
-        return false
-      }
+        // Skip contact/support elements that are not navigation links
+        if ((text.includes('support@') || text.includes('contact@') || text.includes('+91') || text.includes('call to')) && !e.href) {
+          return false
+        }
 
-      return true
-    })
+        return true
+      })
+      .map((e: VisionElement) => {
+        // Add testability score to element
+        const testability = getTestability(e.selector)
+        return {
+          ...e,
+          testability, // Add testability metadata
+        }
+      })
+      .sort((a, b) => {
+        // Sort by testability: high > medium > low > null
+        const testabilityOrder = { high: 3, medium: 2, low: 1, null: 0 }
+        const aOrder = testabilityOrder[a.testability || 'null']
+        const bOrder = testabilityOrder[b.testability || 'null']
+        
+        if (aOrder !== bOrder) {
+          return bOrder - aOrder // Higher testability first
+        }
+        
+        // If same testability, prefer interactive elements
+        const aInteractive = a.actionable || a.href || a.type === 'button' || a.type === 'link'
+        const bInteractive = b.actionable || b.href || b.type === 'button' || b.type === 'link'
+        
+        if (aInteractive !== bInteractive) {
+          return aInteractive ? -1 : 1
+        }
+        
+        return 0
+      })
 
     // Create filtered context
     const filteredContext: VisionContext = {
