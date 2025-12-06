@@ -35,6 +35,7 @@ initializeSentry()
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
+import cookie from '@fastify/cookie'
 import * as Sentry from '@sentry/node'
 import { config } from './config/env'
 import { Database } from './lib/db'
@@ -45,6 +46,7 @@ import { billingRoutes } from './routes/billing'
 import { TestControlWebSocket } from './lib/websocket'
 import { RedisWebSocketManager } from './lib/websocketRedis'
 import { startCleanupScheduler } from './jobs/cleanupArtifacts'
+import { startGuestCleanupJob } from './jobs/cleanupGuestRuns'
 
 const fastify = Fastify({
   logger: true,
@@ -84,6 +86,11 @@ async function registerPlugins() {
   
   await fastify.register(helmet, {
     contentSecurityPolicy: false, // Allow inline styles for development
+  })
+  
+  // Register cookie plugin for guest session tracking
+  await fastify.register(cookie, {
+    secret: process.env.COOKIE_SECRET || 'testlattice-cookie-secret-change-in-production',
   })
 }
 
@@ -226,6 +233,10 @@ async function start() {
     } else {
       fastify.log.info('Artifact cleanup scheduler disabled (set ENABLE_ARTIFACT_CLEANUP=true to enable)')
     }
+    
+    // Start guest test cleanup job
+    startGuestCleanupJob()
+    fastify.log.info('✅ Guest test cleanup job started (runs every hour)')
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)

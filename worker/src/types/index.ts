@@ -149,6 +149,12 @@ export interface TestOptions {
   environment?: TestEnvironment
   approvalPolicy?: ApprovalPolicy
   designSpec?: DesignSpec  // Optional design specification for visual consistency checks
+  // Guest/Quick Start options
+  skipDiagnosis?: boolean  // Skip diagnosis phase for quick tests
+  isGuestRun?: boolean  // Mark as guest run
+  guestSessionId?: string  // Guest session identifier
+  // Tier information
+  userTier?: 'guest' | 'starter' | 'indie' | 'pro' | 'agency'  // User subscription tier
 }
 
 export interface DiagnosisComponentInsight {

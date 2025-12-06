@@ -20,6 +20,8 @@ export interface SynthesizeContextParams {
   runId: string
   browserType: 'chromium' | 'firefox' | 'webkit'
   testableComponents?: DiagnosisComponentInsight[] // Components identified as testable during diagnosis
+  isGuestRun?: boolean // Guest tier flag
+  userTier?: 'guest' | 'starter' | 'indie' | 'pro' | 'agency' // User tier
 }
 
 export interface SynthesizeContextResult {
@@ -85,29 +87,75 @@ export class ContextSynthesizer {
       : playwrightRunner.getDOMSnapshot(sessionId))
 
     // Collect comprehensive testing data (only for web, not mobile)
+    // Respect tier limits for comprehensive testing
     let comprehensiveData: ComprehensiveTestResults | null = null
+    const userTier = params.userTier || (params.isGuestRun ? 'guest' : 'starter')
+    const isGuestRun = params.isGuestRun || userTier === 'guest'
+    
     if (!isMobile && playwrightRunner) {
       try {
-        // Try to get comprehensive test results from diagnosis phase first
-        // (This would require passing diagnosis data, but for now we'll collect fresh)
         const sessionData = playwrightRunner.getSession(sessionId)
         if (sessionData?.page) {
-          // Initialize comprehensive testing if not already done
+          // Initialize comprehensive testing if not already done (always initialize for error tracking)
           if (stepNumber === 1) {
             await this.comprehensiveTesting.initialize(sessionData.page)
           }
 
-          // Collect data at key steps (every 3 steps or on first step)
-          if (stepNumber === 1 || stepNumber % 3 === 0) {
-            console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Collecting comprehensive test data...`)
-            await Promise.all([
-              this.comprehensiveTesting.collectPerformanceMetrics(sessionData.page),
-              this.comprehensiveTesting.checkAccessibility(sessionData.page),
-              this.comprehensiveTesting.analyzeDOMHealth(sessionData.page),
-              this.comprehensiveTesting.detectVisualIssues(sessionData.page),
-            ])
-            comprehensiveData = this.comprehensiveTesting.getResults()
-            console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Comprehensive data collected - ${comprehensiveData.consoleErrors.length} console errors, ${comprehensiveData.networkErrors.length} network errors`)
+          // GUEST TIER: Only collect basic console/network errors (already captured via initialize)
+          // REGISTERED TIERS: Collect full comprehensive testing data based on tier
+          if (isGuestRun) {
+            // Guest: Only basic error tracking (already done via initialize)
+            const results = this.comprehensiveTesting.getResults()
+            comprehensiveData = {
+              consoleErrors: results.consoleErrors,
+              networkErrors: results.networkErrors,
+              performance: {} as any,
+              accessibility: [],
+              visualIssues: [],
+              domHealth: {} as any,
+            }
+          } else {
+            // Registered tiers: Collect based on tier limits
+            if (stepNumber === 1 || stepNumber % 3 === 0) {
+              console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Collecting comprehensive test data (tier: ${userTier})...`)
+              
+              const collectionPromises: Promise<any>[] = []
+              
+              // Performance metrics (starter+)
+              if (userTier !== 'guest') {
+                collectionPromises.push(
+                  this.comprehensiveTesting.collectPerformanceMetrics(sessionData.page)
+                )
+              }
+              
+              // Accessibility (indie+)
+              if (userTier === 'indie' || userTier === 'pro' || userTier === 'agency') {
+                collectionPromises.push(
+                  this.comprehensiveTesting.checkAccessibility(sessionData.page)
+                )
+              }
+              
+              // DOM Health (indie+)
+              if (userTier === 'indie' || userTier === 'pro' || userTier === 'agency') {
+                collectionPromises.push(
+                  this.comprehensiveTesting.analyzeDOMHealth(sessionData.page)
+                )
+              }
+              
+              // Visual Issues (indie+)
+              if (userTier === 'indie' || userTier === 'pro' || userTier === 'agency') {
+                collectionPromises.push(
+                  this.comprehensiveTesting.detectVisualIssues(sessionData.page)
+                )
+              }
+              
+              if (collectionPromises.length > 0) {
+                await Promise.all(collectionPromises)
+              }
+              
+              comprehensiveData = this.comprehensiveTesting.getResults()
+              console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Comprehensive data collected (tier: ${userTier}) - ${comprehensiveData.consoleErrors.length} console errors, ${comprehensiveData.networkErrors.length} network errors`)
+            }
           }
         }
       } catch (compError: any) {

@@ -102,6 +102,10 @@ export interface TestOptions {
   };
   environment?: TestEnvironment;
   approvalPolicy?: ApprovalPolicy;
+  // Guest/Quick Start options
+  skipDiagnosis?: boolean; // Skip diagnosis phase for quick tests
+  isGuestRun?: boolean; // Mark as guest run for rate limiting
+  guestSessionId?: string; // Guest session identifier
 }
 
 export interface CreateTestRunRequest {
@@ -109,6 +113,14 @@ export interface CreateTestRunRequest {
   build: Build;
   profile: TestProfile;
   options?: TestOptions;
+}
+
+export interface CreateGuestTestRunRequest {
+  url: string; // Single URL for quick test
+  build?: Omit<Build, 'url'>; // Optional build config (type, etc.)
+  profile?: TestProfile; // Optional profile (defaults to chrome-latest)
+  options?: Omit<TestOptions, 'isGuestRun' | 'guestSessionId'>; // Guest options are set automatically
+  email?: string; // Optional email for results notification
 }
 
 export interface TestRun {
@@ -133,6 +145,9 @@ export interface TestRun {
   currentStep?: number;
   diagnosis?: DiagnosisResult;
   diagnosisProgress?: DiagnosisProgress;
+  // Guest run fields
+  guestSessionId?: string; // Guest session identifier
+  expiresAt?: string; // Expiration timestamp for guest runs (24 hours)
 }
 
 export interface DiagnosisComponentInsight {

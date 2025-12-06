@@ -12,9 +12,13 @@ interface TestConnection {
 interface ManualAction {
   action: 'click' | 'type' | 'scroll' | 'navigate'
   selector?: string
+  target?: string
   value?: string
   description: string
   timestamp: string
+  godMode?: boolean  // NEW: Indicates this is a God Mode intervention
+  clickX?: number    // NEW: X coordinate for God Mode click
+  clickY?: number    // NEW: Y coordinate for God Mode click
 }
 
 export class TestControlWebSocket {
@@ -181,12 +185,12 @@ export class TestControlWebSocket {
   /**
    * Queue a manual action for the test processor to pick up
    */
-  private queueManualAction(runId: string, action: ManualAction) {
+  public queueManualAction(runId: string, action: ManualAction) {
     if (!this.manualActionQueues.has(runId)) {
       this.manualActionQueues.set(runId, [])
     }
     this.manualActionQueues.get(runId)!.push(action)
-    console.log(`Manual action queued for ${runId}:`, action.action, action.selector)
+    console.log(`Manual action queued for ${runId}:`, action.action, action.selector || action.target, action.godMode ? '(God Mode)' : '')
   }
 
   /**

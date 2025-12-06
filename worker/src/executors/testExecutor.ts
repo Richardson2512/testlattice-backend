@@ -16,11 +16,15 @@ export interface ExecuteActionParams {
   runId: string
   browserType: 'chromium' | 'firefox' | 'webkit'
   stepNumber: number
+  userTier?: 'guest' | 'starter' | 'indie' | 'pro' | 'agency' // User tier for retry limits
 }
 
 export interface ExecuteActionResult {
   result: ActionExecutionResult | void
   healing: SelfHealingInfo | undefined
+  stuck?: boolean  // NEW: Indicates AI is stuck and needs God Mode intervention
+  stuckReason?: string  // NEW: Why AI is stuck
+  retryResult?: any  // NEW: Full retry result for God Mode processing
 }
 
 export interface CaptureStateResult {
@@ -76,6 +80,17 @@ export class TestExecutor {
     let healingMeta: SelfHealingInfo | undefined
 
     // Use IRL for retry + self-healing if available and enabled
+    // Apply tier-based retry limits
+    const userTier = params.userTier || 'starter'
+    const tierRetryLimits: Record<string, number> = {
+      guest: 1,
+      starter: 1,
+      indie: 3,
+      pro: 5,
+      agency: 10,
+    }
+    const maxRetries = tierRetryLimits[userTier] || 3
+    
     if (enableIRL && retryLayer && (action.action === 'click' || action.action === 'type' || action.action === 'assert')) {
       const retryResult = await retryLayer.executeWithRetry(
         sessionId,
@@ -83,7 +98,7 @@ export class TestExecutor {
         context,
         isMobile,
         {
-          maxRetries: 3,
+          maxRetries,
           enableVisionMatching: true,
           enableAIAlternatives: true,
         }
@@ -102,7 +117,22 @@ export class TestExecutor {
           console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: IRL succeeded after ${retryResult.attempts} attempts`)
         }
       } else {
-        // IRL failed, throw error to be caught by outer try-catch
+        // IRL failed - check if AI is stuck (needs God Mode)
+        if (retryResult.stuck) {
+          console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: 🎮 AI is STUCK - God Mode intervention needed`)
+          console.log(`[${runId}] [${browserType.toUpperCase()}] Stuck reason: ${retryResult.stuckReason || 'Unknown'}`)
+          
+          // Return stuck state instead of throwing - let test processor handle God Mode
+          return {
+            result: undefined,
+            healing: healingMeta,
+            stuck: true,
+            stuckReason: retryResult.stuckReason || retryResult.finalError?.message || 'Unknown error after max retries',
+            retryResult: retryResult,
+          }
+        }
+        
+        // Not stuck, just failed - throw error to be caught by outer try-catch
         throw retryResult.finalError || new Error(`IRL retry exhausted after ${retryResult.attempts} attempts`)
       }
     } else {
@@ -114,6 +144,7 @@ export class TestExecutor {
     return {
       result: executionResult,
       healing: healingMeta,
+      stuck: false,  // Not stuck if we got here
     }
   }
 

@@ -37,6 +37,9 @@ import { ContextSynthesizer } from '../synthesizers/contextSynthesizer'
 import { TestExecutor } from '../executors/testExecutor'
 import { VisualDiffService } from '../services/visualDiff'
 import { GodModeService, StuckDetection } from '../services/godMode'
+import { GuestFlow } from './flows/GuestFlow'
+import { RegisteredFlow } from './flows/RegisteredFlow'
+import { DiagnosisRunner } from './diagnosis/DiagnosisRunner'
 
 class DiagnosisCancelledError extends Error {
   constructor(message = 'Diagnosis cancelled by user') {
@@ -87,6 +90,7 @@ export class TestProcessor {
   private testExecutor: TestExecutor
   private visualDiffService: VisualDiffService
   private godMode: GodModeService
+  private runIdToSessionId: Map<string, string> = new Map() // Track runId -> sessionId mapping for live preview
 
   constructor(
     unifiedBrain: UnifiedBrainService,
@@ -656,6 +660,34 @@ export class TestProcessor {
     }
   }
 
+  /**
+   * Get current page HTML for live preview (God Mode)
+   */
+  async getCurrentPageHTML(runId: string): Promise<string | null> {
+    try {
+      // Get sessionId from runId mapping
+      const sessionId = this.runIdToSessionId.get(runId)
+      if (!sessionId) {
+        console.log(`[${runId}] No active session found for live preview`)
+        return null
+      }
+
+      const session = this.playwrightRunner.getSession(sessionId)
+      if (!session?.page) {
+        console.log(`[${runId}] Session or page not available for live preview`)
+        return null
+      }
+
+      // Get current page HTML
+      const html = await session.page.content()
+      console.log(`[${runId}] Retrieved live preview HTML (${html.length} bytes)`)
+      return html
+    } catch (error: any) {
+      console.error(`[${runId}] Failed to get live preview HTML:`, error.message)
+      return null
+    }
+  }
+
   private async getPageTitle(session: RunnerSession | null): Promise<string | undefined> {
     if (!session) {
       return undefined
@@ -939,6 +971,85 @@ export class TestProcessor {
       }
       return null
     }
+  }
+
+  /**
+   * Wait for God Mode intervention (user click or manual action)
+   * Polls the API for manual actions with God Mode data
+   */
+  private async waitForGodModeIntervention(
+    runId: string,
+    sessionId: string,
+    originalAction: LLMAction,
+    stuckDetection: any,
+    isMobile: boolean,
+    timeoutMs: number = 300000 // 5 minutes default
+  ): Promise<{ action: string; selector?: string; target?: string; value?: string; description?: string; godMode?: boolean; clickX?: number; clickY?: number } | null> {
+    const startTime = Date.now()
+    const pollInterval = 1000 // Poll every second
+    const fetch = (await import('node-fetch')).default
+    
+    console.log(`[${runId}] 🎮 Waiting for God Mode intervention (timeout: ${timeoutMs}ms)...`)
+    
+    while (Date.now() - startTime < timeoutMs) {
+      // Check if test was cancelled
+      const state = await this.getTestRunState(runId)
+      if (state.status === TestRunStatus.CANCELLED) {
+        console.log(`[${runId}] Test cancelled while waiting for God Mode intervention`)
+        return null
+      }
+      
+      // Check for manual actions
+      try {
+        const response = await fetch(`${this.apiUrl}/api/tests/${runId}/manual-actions`)
+        
+        if (response.ok) {
+          const data = await response.json()
+          const actions = data.actions || []
+          
+          if (actions.length > 0) {
+            const manualAction = actions[0]
+            
+            // Check if it's a God Mode action (has click coordinates)
+            if (manualAction.godMode && manualAction.clickX !== undefined && manualAction.clickY !== undefined) {
+              console.log(`[${runId}] 🎮 God Mode click received at (${manualAction.clickX}, ${manualAction.clickY})`)
+              return {
+                action: manualAction.action || 'click',
+                selector: manualAction.selector,
+                target: manualAction.target,
+                value: manualAction.value,
+                description: manualAction.description,
+                godMode: true,
+                clickX: manualAction.clickX,
+                clickY: manualAction.clickY,
+              }
+            } else {
+              // Regular manual action
+              console.log(`[${runId}] 🎮 Manual action received: ${manualAction.action}`)
+              return {
+                action: manualAction.action,
+                selector: manualAction.selector,
+                target: manualAction.target,
+                value: manualAction.value,
+                description: manualAction.description,
+                godMode: false,
+              }
+            }
+          }
+        }
+      } catch (error: any) {
+        // Silently continue polling
+        if (error.message && !error.message.includes('ECONNREFUSED')) {
+          console.warn(`[${runId}] Error checking for manual actions:`, error.message)
+        }
+      }
+      
+      // Wait before next poll
+      await this.delay(pollInterval)
+    }
+    
+    console.warn(`[${runId}] 🎮 God Mode intervention timeout after ${timeoutMs}ms`)
+    return null
   }
 
   /**
@@ -1708,7 +1819,22 @@ export class TestProcessor {
 
       // Reserve test runner session
       console.log(`[${runId}] [${browserType.toUpperCase()}] Reserving ${build.type} session...`)
+      if (options?.isGuestRun) {
+        console.log(`[${runId}] [${browserType.toUpperCase()}] 🎯 Guest run: Launching browser session (same as registered users)`)
+      }
       session = await runner.reserveSession(browserProfile)
+      
+      if (!session) {
+        throw new Error(`Failed to reserve ${build.type} session for test run ${runId}`)
+      }
+      
+      console.log(`[${runId}] [${browserType.toUpperCase()}] ✅ Browser session reserved successfully (sessionId: ${session.id})`)
+      
+      // Track runId -> sessionId mapping for live preview
+      if (session) {
+        this.runIdToSessionId.set(runId, session.id)
+        console.log(`[${runId}] [${browserType.toUpperCase()}] Live preview mapping: runId ${runId} -> sessionId ${session.id}`)
+      }
 
       // Start WebRTC streaming if enabled (supports multi-browser streaming)
       if (config.streaming?.enabled && build.type === BuildType.WEB && session.page) {
@@ -1769,12 +1895,14 @@ export class TestProcessor {
 
       // Navigate to initial URL if web
       if (build.type === BuildType.WEB && build.url) {
+        console.log(`[${runId}] [${browserType.toUpperCase()}] 🌐 Navigating to ${build.url} (guest run: ${options?.isGuestRun || false})`)
         const navigateAction: LLMAction = {
           action: 'navigate',
           value: build.url,
           description: `Navigate to ${build.url}`,
         }
         await runner.executeAction(session.id, navigateAction)
+        console.log(`[${runId}] [${browserType.toUpperCase()}] ✅ Navigation completed successfully`)
         
         // Wait 3 seconds after navigation for page to fully load and cookie banners to appear
         console.log(`[${runId}] [${browserType.toUpperCase()}] Waiting 3 seconds after navigation for page load...`)
@@ -2106,8 +2234,11 @@ ${parsedInstructions.structuredPlan}
             }
           }
           
+          // Get user tier from options (determine once per step)
+          const currentUserTier = (options?.userTier as 'guest' | 'starter' | 'indie' | 'pro' | 'agency') || (options?.isGuestRun ? 'guest' : 'starter')
+          
           // Synthesize context using ContextSynthesizer
-          console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Synthesizing context...`)
+          console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Synthesizing context... (tier: ${currentUserTier})`)
           const contextResult = await this.contextSynthesizer.synthesizeContext({
             sessionId: session.id,
             isMobile,
@@ -2124,6 +2255,8 @@ ${parsedInstructions.structuredPlan}
             runId,
             browserType,
             testableComponents: diagnosisData?.testableComponents || [],
+            isGuestRun: options?.isGuestRun || currentUserTier === 'guest',
+            userTier: currentUserTier,
           })
           
           const { context, filteredContext, currentUrl, comprehensiveData } = contextResult
@@ -2302,6 +2435,9 @@ ${parsedInstructions.structuredPlan}
           // Execute action using TestExecutor
           console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Executing action:`, action.action, action.target)
           
+          // Get user tier for retry limits and God Mode (use same variable)
+          const currentUserTierForStep = currentUserTier
+          
           const executionResult = await this.testExecutor.executeAction({
             sessionId: session.id,
             action,
@@ -2314,7 +2450,185 @@ ${parsedInstructions.structuredPlan}
             runId,
             browserType,
             stepNumber,
+            userTier: currentUserTierForStep,
           })
+          
+          // 🎮 GOD MODE: Check if AI is stuck and needs manual intervention
+          // Only enable God Mode for indie+ tiers
+          const godModeEnabled = currentUserTierForStep === 'indie' || currentUserTierForStep === 'pro' || currentUserTierForStep === 'agency'
+          
+          if (executionResult.stuck) {
+            if (!godModeEnabled) {
+              // Guest/Starter tier: No God Mode, fail the test
+              console.warn(`[${runId}] [${browserType.toUpperCase()}] AI stuck but God Mode not available for ${currentUserTierForStep} tier. Test will fail.`)
+              throw new Error(`AI stuck at step ${stepNumber}. God Mode (manual intervention) is only available for Indie tier and above. Upgrade to continue testing.`)
+            }
+            
+            const interventionStartTime = Date.now() // Track intervention start time
+            console.log(`[${runId}] [${browserType.toUpperCase()}] 🎮 GOD MODE ACTIVATED: AI is stuck at step ${stepNumber}`)
+            
+            // Detect stuck state using GodModeService
+            const stuckDetection = this.godMode.detectStuck(
+              action,
+              new Error(executionResult.stuckReason || 'Unknown error'),
+              executionResult.retryResult?.attempts || 3
+            )
+            
+            // Capture current state for God Mode UI
+            const stuckStateResult = await this.testExecutor.captureState(session.id, isMobile)
+            const stuckScreenshotBuffer = Buffer.from(stuckStateResult.screenshot, 'base64')
+            
+            // Notify API server to broadcast WebSocket event to frontend
+            try {
+              const fetch = (await import('node-fetch')).default
+              await fetch(`${this.apiUrl}/api/tests/${runId}/notify-stuck`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  message: stuckDetection.suggestedIntervention,
+                  action: {
+                    type: action.action,
+                    selector: action.selector,
+                    target: action.target,
+                  },
+                  error: stuckDetection.error,
+                  screenshot: stuckStateResult.screenshot, // Base64 screenshot for frontend
+                }),
+              })
+            } catch (notifyError: any) {
+              console.warn(`[${runId}] Failed to notify frontend about stuck state:`, notifyError.message)
+            }
+            
+            // Pause test run to wait for manual intervention
+            try {
+              const fetch = (await import('node-fetch')).default
+              await fetch(`${this.apiUrl}/api/tests/${runId}/pause`, {
+                method: 'POST',
+              })
+              console.log(`[${runId}] Test paused for God Mode intervention`)
+            } catch (pauseError: any) {
+              console.warn(`[${runId}] Failed to pause test:`, pauseError.message)
+            }
+            
+            // Wait for manual action (God Mode intervention)
+            console.log(`[${runId}] Waiting for God Mode intervention (user click)...`)
+            const manualAction = await this.waitForGodModeIntervention(
+              runId,
+              session.id,
+              action,
+              stuckDetection,
+              isMobile,
+              300000 // 5 minute timeout
+            )
+            
+            if (manualAction) {
+              // Extract selector from user's click if God Mode
+              if (manualAction.godMode && manualAction.clickX !== undefined && manualAction.clickY !== undefined) {
+                console.log(`[${runId}] 🎮 Extracting selector from God Mode click at (${manualAction.clickX}, ${manualAction.clickY})`)
+                
+                const sessionData = this.playwrightRunner.getSession(session.id)
+                if (sessionData?.page) {
+                  try {
+                    const extraction = await this.godMode.extractSelectorFromClick(
+                      sessionData.page,
+                      manualAction.clickX!,
+                      manualAction.clickY!
+                    )
+                    
+                    console.log(`[${runId}] 🎮 God Mode extracted selector: ${extraction.bestSelector} (${extraction.selectorPriority})`)
+                    
+                    // Update action with new selector
+                    action = this.godMode.createUpdatedAction(
+                      action,
+                      extraction.bestSelector,
+                      extraction.selectorPriority
+                    )
+                    
+                    // Log intervention for learning
+                    const timeToResolve = Date.now() - interventionStartTime
+                    this.godMode.logIntervention(
+                      runId,
+                      stepNumber,
+                      stuckDetection,
+                      extraction,
+                      manualAction.clickX!,
+                      manualAction.clickY!,
+                      timeToResolve
+                    )
+                    
+                    // Retry action with corrected selector
+                    console.log(`[${runId}] 🎮 Retrying action with God Mode selector: ${action.selector}`)
+                    const retryExecutionResult = await this.testExecutor.executeAction({
+                      sessionId: session.id,
+                      action,
+                      context: filteredContext,
+                      isMobile,
+                      enableIRL: false, // Don't retry again, use selector directly
+                      retryLayer: null,
+                      playwrightRunner: this.playwrightRunner,
+                      appiumRunner: this.appiumRunner || undefined,
+                      runId,
+                      browserType,
+                      stepNumber,
+                    })
+                    
+                    // Use retry result
+                    executionResult.result = retryExecutionResult.result
+                    executionResult.healing = retryExecutionResult.healing
+                    executionResult.stuck = false
+                  } catch (extractionError: any) {
+                    console.error(`[${runId}] Failed to extract selector from God Mode click:`, extractionError.message)
+                    // Fall through to use manual action as-is
+                  }
+                }
+              } else {
+                // Regular manual action (not God Mode)
+                console.log(`[${runId}] Using manual action: ${manualAction.action} ${manualAction.selector || manualAction.target || ''}`)
+                action = {
+                  action: manualAction.action as any,
+                  selector: manualAction.selector,
+                  target: manualAction.target,
+                  value: manualAction.value,
+                  description: manualAction.description || `Manual action: ${manualAction.action}`,
+                  confidence: 1.0,
+                }
+                
+                // Execute manual action
+                const manualExecutionResult = await this.testExecutor.executeAction({
+                  sessionId: session.id,
+                  action,
+                  context: filteredContext,
+                  isMobile,
+                  enableIRL: false,
+                  retryLayer: null,
+                  playwrightRunner: this.playwrightRunner,
+                  appiumRunner: this.appiumRunner || undefined,
+                  runId,
+                  browserType,
+                  stepNumber,
+                })
+                
+                executionResult.result = manualExecutionResult.result
+                executionResult.healing = manualExecutionResult.healing
+                executionResult.stuck = false
+              }
+              
+              // Resume test run
+              try {
+                const fetch = (await import('node-fetch')).default
+                await fetch(`${this.apiUrl}/api/tests/${runId}/resume`, {
+                  method: 'POST',
+                })
+                console.log(`[${runId}] Test resumed after God Mode intervention`)
+              } catch (resumeError: any) {
+                console.warn(`[${runId}] Failed to resume test:`, resumeError.message)
+              }
+            } else {
+              // Timeout - continue with error
+              console.warn(`[${runId}] God Mode intervention timeout - continuing with error`)
+              throw new Error(`AI stuck and no manual intervention received: ${stuckDetection.error}`)
+            }
+          }
           
           const healingMeta = executionResult.healing
           if (healingMeta) {
@@ -2346,9 +2660,11 @@ ${parsedInstructions.structuredPlan}
           const { elementBounds, targetElementBounds } = boundsResult
 
           // Optional vision-language validation (checks layout using GPT-4o with selective usage)
+          // Only for indie+ tiers (not available for guest/starter)
           let visionIssues: VisionIssue[] = []
           if (
             this.visionValidator &&
+            (currentUserTierForStep === 'indie' || currentUserTierForStep === 'pro' || currentUserTierForStep === 'agency') &&
             this.visionValidator.shouldUseVision({
               stepNumber,
               hasError: false,
@@ -2383,8 +2699,13 @@ ${parsedInstructions.structuredPlan}
           const { screenshotUrl, domUrl } = artifactsResult
 
           // Visual Regression Testing (if enabled)
+          // Only for pro+ tiers
           let visualDiffResult: { hasDifference: boolean; diffPercentage: number; diffImageUrl?: string } | null = null
-          if (options?.visualDiff && options?.baselineRunId) {
+          if (
+            options?.visualDiff && 
+            options?.baselineRunId &&
+            (currentUserTierForStep === 'pro' || currentUserTierForStep === 'agency')
+          ) {
             try {
               // Fetch baseline screenshot from previous run
               const fetch = (await import('node-fetch')).default
@@ -2757,8 +3078,14 @@ ${parsedInstructions.structuredPlan}
           }
           console.log(`[${runId}] [${browserType.toUpperCase()}] Session released`)
           
-          // Upload video if available (only for web builds)
-          if (releaseResult && releaseResult.videoPath) {
+          // Clean up runId -> sessionId mapping
+          this.runIdToSessionId.delete(runId)
+          
+          // Upload video if available (only for web builds and indie+ tiers)
+          const userTierForVideo = currentUserTierForStep
+          const videoRecordingEnabled = userTierForVideo === 'indie' || userTierForVideo === 'pro' || userTierForVideo === 'agency'
+          
+          if (releaseResult && releaseResult.videoPath && videoRecordingEnabled) {
             try {
               const fs = await import('fs')
               if (fs.existsSync(releaseResult.videoPath)) {
@@ -2811,8 +3138,9 @@ ${parsedInstructions.structuredPlan}
             }
           }
           
-          // Upload trace if available (Time-Travel Debugger, only for web builds)
-          if (releaseResult && releaseResult.tracePath) {
+          // Upload trace if available (Time-Travel Debugger, only for web builds and indie+ tiers)
+          const traceRecordingEnabled = userTierForVideo === 'indie' || userTierForVideo === 'pro' || userTierForVideo === 'agency'
+          if (releaseResult && releaseResult.tracePath && traceRecordingEnabled) {
             try {
               const fs = await import('fs')
               if (fs.existsSync(releaseResult.tracePath)) {
@@ -2922,11 +3250,12 @@ ${parsedInstructions.structuredPlan}
     })
 
     // If we are in early stage and haven't diagnosed yet, run diagnosis
-    // Unless monkey mode or specific override which skips diagnosis
+    // Unless monkey mode, skipDiagnosis option, or specific override which skips diagnosis
     const shouldRunDiagnosis =
       build.type === BuildType.WEB &&
       Boolean(build.url) &&
-      options?.testMode !== 'monkey'
+      options?.testMode !== 'monkey' &&
+      !options?.skipDiagnosis // Skip diagnosis for guest/quick start runs
 
     if (
       shouldRunDiagnosis &&
@@ -2945,6 +3274,8 @@ ${parsedInstructions.structuredPlan}
         }
         throw error
       }
+    } else if (options?.skipDiagnosis) {
+      console.log(`[${runId}] Skipping diagnosis (skipDiagnosis=true) - proceeding directly to test execution`)
     }
 
     // If waiting approval/diagnosing, we shouldn't proceed
@@ -2954,6 +3285,17 @@ ${parsedInstructions.structuredPlan}
     }
 
     // Otherwise, proceed with normal test execution
+    
+    // Log guest run status for debugging
+    if (options?.isGuestRun || options?.skipDiagnosis) {
+      console.log(`[${runId}] 🎯 Guest test run detected - using same execution path as registered users`)
+      console.log(`[${runId}] Guest run options:`, {
+        skipDiagnosis: options?.skipDiagnosis,
+        isGuestRun: options?.isGuestRun,
+        maxSteps: options?.maxSteps,
+        testMode: options?.testMode,
+      })
+    }
     
     const isAllPagesMode = options?.allPages || options?.testMode === 'all'
     const isMultiPageMode = options?.testMode === 'multi'

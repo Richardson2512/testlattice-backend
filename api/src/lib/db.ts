@@ -9,12 +9,19 @@ export class Database {
     const now = new Date().toISOString()
     const runId = randomUUID()
     
+    // Calculate expiration for guest runs (24 hours from now)
+    const expiresAt = data.guestSessionId 
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      : null
+    
     const { data: run, error } = await supabase
       .from('test_runs')
       .insert({
         id: runId,
         project_id: data.projectId,
         user_id: userId || null, // Link to authenticated user if provided
+        guest_session_id: data.guestSessionId || null,
+        expires_at: expiresAt,
         status: data.status,
         build: data.build,
         profile: data.profile,
@@ -266,6 +273,8 @@ export class Database {
       diagnosisProgress: row.diagnosis_progress || null,
       paused: row.paused || false,
       currentStep: row.current_step || 0,
+      guestSessionId: row.guest_session_id || undefined,
+      expiresAt: row.expires_at || undefined,
     }
   }
 
@@ -290,6 +299,113 @@ export class Database {
       size: row.size,
       createdAt: row.created_at,
     }
+  }
+
+  // Guest project management
+  static async getOrCreateGuestProject(): Promise<Project> {
+    const guestProjectName = 'Guest Project'
+    
+    // Try to find existing guest project
+    const { data: existing, error: findError } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('name', guestProjectName)
+      .eq('team_id', 'guest-team')
+      .limit(1)
+      .single()
+    
+    if (existing && !findError) {
+      return this.mapProjectFromDb(existing)
+    }
+    
+    // Create new guest project
+    const now = new Date().toISOString()
+    const { data: project, error } = await supabase
+      .from('projects')
+      .insert({
+        name: guestProjectName,
+        description: 'Temporary project for guest test runs',
+        team_id: 'guest-team',
+        user_id: null,
+        created_at: now,
+        updated_at: now,
+      })
+      .select()
+      .single()
+    
+    if (error) {
+      throw new Error(`Failed to create guest project: ${error.message}`)
+    }
+    
+    return this.mapProjectFromDb(project)
+  }
+
+  // Check guest test count for rate limiting
+  static async getGuestTestCount(guestSessionId: string, timeWindowMs: number = 24 * 60 * 60 * 1000): Promise<number> {
+    const cutoffTime = new Date(Date.now() - timeWindowMs).toISOString()
+    
+    const { count, error } = await supabase
+      .from('test_runs')
+      .select('*', { count: 'exact', head: true })
+      .eq('guest_session_id', guestSessionId)
+      .gte('created_at', cutoffTime)
+    
+    if (error) {
+      console.error('Failed to get guest test count:', error)
+      return 0
+    }
+    
+    return count || 0
+  }
+
+  // Get last test time for cooldown checking
+  static async getLastGuestTestTime(guestSessionId: string): Promise<Date | null> {
+    const { data, error } = await supabase
+      .from('test_runs')
+      .select('created_at')
+      .eq('guest_session_id', guestSessionId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+    
+    if (error || !data) {
+      return null
+    }
+    
+    return new Date(data.created_at)
+  }
+
+  // Clean up expired guest runs
+  static async cleanupExpiredGuestRuns(): Promise<number> {
+    const now = new Date().toISOString()
+    
+    const { data, error } = await supabase
+      .from('test_runs')
+      .select('id')
+      .not('expires_at', 'is', null)
+      .lt('expires_at', now)
+    
+    if (error) {
+      console.error('Failed to query expired guest runs:', error)
+      return 0
+    }
+    
+    if (!data || data.length === 0) {
+      return 0
+    }
+    
+    const ids = data.map(r => r.id)
+    const { error: deleteError } = await supabase
+      .from('test_runs')
+      .delete()
+      .in('id', ids)
+    
+    if (deleteError) {
+      console.error('Failed to delete expired guest runs:', deleteError)
+      return 0
+    }
+    
+    return ids.length
   }
 
   // Initialize - check connection and create default project if needed

@@ -27,6 +27,7 @@ import './instrument'
 import { Worker } from 'bullmq'
 import IORedis from 'ioredis'
 import * as Sentry from '@sentry/node'
+import Fastify from 'fastify'
 import { config } from './config/env'
 import { JobData, TestRunStatus } from './types'
 import { UnifiedBrainService } from './services/unifiedBrainService'
@@ -36,6 +37,7 @@ import { PlaywrightRunner } from './runners/playwright'
 import { AppiumRunner } from './runners/appium'
 import { TestProcessor } from './processors/testProcessor'
 import { VisionValidatorService } from './services/visionValidator'
+import { trackGuestTestCompleted, trackGuestTestFailed, trackGuestStepLimitHit } from './lib/analytics'
 
 // Redis connection with error handling
 // Read directly from process.env first (after dotenv loads) to avoid config caching
@@ -215,6 +217,42 @@ async function processTestJob(jobData: JobData) {
           completedAt: new Date().toISOString(),
         }),
       })
+      
+      // Track analytics for guest tests
+      const testRunResponse = await fetch(`${apiUrl}/api/tests/${runId}`)
+      const testRunData = await testRunResponse.json()
+      const testRun = testRunData.testRun
+      
+      if (testRun?.guestSessionId || testRun?.options?.isGuestRun) {
+        const steps = result.steps || []
+        const issues = steps.filter((s: any) => !s.success).length
+        const hitStepLimit = steps.length >= (testRun.options?.maxSteps || 10)
+        
+        if (result.success) {
+          trackGuestTestCompleted({
+            testId: runId,
+            sessionId: testRun.guestSessionId || 'unknown',
+            steps: steps.length,
+            issues,
+            duration: testRun.duration || 0,
+            hitStepLimit,
+          })
+          
+          if (hitStepLimit) {
+            trackGuestStepLimitHit({
+              testId: runId,
+              sessionId: testRun.guestSessionId || 'unknown',
+              stepsCompleted: steps.length,
+            })
+          }
+        } else {
+          trackGuestTestFailed({
+            testId: runId,
+            sessionId: testRun.guestSessionId || 'unknown',
+            error: result.error || 'Unknown error',
+          })
+        }
+      }
     } catch (apiError) {
       console.error(`[${runId}] Failed to update API:`, apiError)
     }
@@ -429,6 +467,30 @@ async function startWorker() {
       console.log(`📱 Appium: Disabled (set ENABLE_APPIUM=true to enable)`)
     }
     console.log(`🔗 API URL: ${config.api.url || 'http://localhost:3001'}`)
+    
+    // Start HTTP server for live preview endpoint
+    const httpServer = Fastify({ logger: false })
+    
+    // Live preview endpoint
+    httpServer.get('/api/test-runs/:runId/live-preview', async (request: any, reply: any) => {
+      try {
+        const { runId } = request.params as { runId: string }
+        const html = await testProcessor.getCurrentPageHTML(runId)
+        
+        if (!html) {
+          return reply.code(404).send({ error: 'No page HTML available' })
+        }
+        
+        reply.type('text/html')
+        return reply.send(html)
+      } catch (error: any) {
+        return reply.code(500).send({ error: error.message || 'Failed to get page HTML' })
+      }
+    })
+    
+    const workerPort = parseInt(process.env.WORKER_PORT || '3002', 10)
+    await httpServer.listen({ port: workerPort, host: '0.0.0.0' })
+    console.log(`🌐 Worker HTTP server listening on port ${workerPort}`)
     
     // Log optional services status (check process.env directly to avoid config caching)
     const pineconeApiKey = process.env.PINECONE_API_KEY || config.pinecone.apiKey

@@ -2,8 +2,7 @@
 // Wraps every step in retry policy, self-heals selectors, and allows AI to propose alternatives
 
 import { LLMAction, VisionContext, VisionElement, SelfHealingInfo, ActionExecutionResult } from '../types'
-import { LlamaService } from './llama'
-import { LayeredModelService } from './layeredModelService'
+import { UnifiedBrainService } from './unifiedBrainService'
 import { PlaywrightRunner, RunnerSession } from '../runners/playwright'
 import { AppiumRunner } from '../runners/appium'
 
@@ -46,24 +45,18 @@ export interface RetryResult {
  * 3. AI-proposed alternative strategies when retries fail
  */
 export class IntelligentRetryLayer {
-  private llamaService?: LlamaService
-  private layeredModelService?: LayeredModelService
+  private unifiedBrainService: UnifiedBrainService
   private playwrightRunner?: PlaywrightRunner
   private appiumRunner?: AppiumRunner
   private defaultConfig: Required<RetryConfig>
 
   constructor(
-    llamaServiceOrLayered: LlamaService | LayeredModelService,
+    unifiedBrainService: UnifiedBrainService,
     playwrightRunner?: PlaywrightRunner,
     appiumRunner?: AppiumRunner,
     config?: RetryConfig
   ) {
-    // Support both LlamaService (legacy) and LayeredModelService (new)
-    if (llamaServiceOrLayered instanceof LayeredModelService) {
-      this.layeredModelService = llamaServiceOrLayered
-    } else {
-      this.llamaService = llamaServiceOrLayered as LlamaService
-    }
+    this.unifiedBrainService = unifiedBrainService
     this.playwrightRunner = playwrightRunner
     this.appiumRunner = appiumRunner
     
@@ -239,8 +232,8 @@ export class IntelligentRetryLayer {
     }
 
     // Strategy 2: Vision + AI matching (slower, more accurate)
-    // Use LayeredModelService (Qwen-Coder-14B) if available, otherwise fallback to LlamaService
-    if (enableVisionMatching && (this.layeredModelService || this.llamaService)) {
+    // Use UnifiedBrainService for vision matching
+    if (enableVisionMatching && this.unifiedBrainService) {
       const visionHealing = await this.healViaVisionMatching(sessionId, action, context, errorMessage, isMobile)
       if (visionHealing) {
         return visionHealing
@@ -327,8 +320,8 @@ export class IntelligentRetryLayer {
     errorMessage: string,
     isMobile: boolean
   ): Promise<SelfHealingInfo | null> {
-    // Prefer LayeredModelService (Qwen-Coder-14B) for heavy reasoning, fallback to LlamaService
-    if (!this.layeredModelService && !this.llamaService) return null
+    // Use UnifiedBrainService for heavy reasoning
+    if (!this.unifiedBrainService) return null
 
     try {
       // Capture current screenshot
@@ -343,10 +336,12 @@ export class IntelligentRetryLayer {
       // Ask AI to find alternative selector based on vision + DOM
       const prompt = this.buildVisionHealingPrompt(action, context, errorMessage)
       
-      // Use LayeredModelService (Qwen-Coder-14B) for heavy reasoning, or LlamaService as fallback
-      const analysis = this.layeredModelService
-        ? await this.layeredModelService.analyzeScreenshot(screenshot.toString('base64'), domSnapshot, prompt)
-        : await this.llamaService!.analyzeScreenshot(screenshot, domSnapshot, prompt)
+      // Use UnifiedBrainService for heavy reasoning
+      const analysis = await this.unifiedBrainService.analyzeScreenshot(
+        screenshot.toString('base64'),
+        domSnapshot,
+        prompt
+      )
       
       // Find best matching element from analysis
       const bestMatch = this.findBestMatchFromVision(analysis, action, context)
@@ -375,8 +370,8 @@ export class IntelligentRetryLayer {
     errorMessage: string,
     attempt: number
   ): Promise<LLMAction | null> {
-    // Use LayeredModelService (Qwen-Coder-14B) for heavy reasoning when retries fail
-    if (!this.layeredModelService && !this.llamaService) {
+    // Use UnifiedBrainService for heavy reasoning when retries fail
+    if (!this.unifiedBrainService) {
       // Fallback to heuristic if no AI service available
       return this.generateHeuristicAlternative(action, context, errorMessage)
     }
@@ -425,18 +420,12 @@ If no good alternative exists, return: {"action": "wait", "description": "No via
         metadata: context.metadata,
       }
 
-      // Generate alternative using LayeredModelService (Qwen-Coder-14B for heavy reasoning) or LlamaService
-      const alternative = this.layeredModelService
-        ? await this.layeredModelService.generateAction(
-            alternativeContext,
-            [{ action, timestamp: new Date().toISOString() }],
-            `${retryContextNote}\n\nFind alternative to failed action: ${action.description}. Error: ${errorMessage}`
-          )
-        : await this.llamaService!.generateAction(
-            alternativeContext,
-            [{ action, timestamp: new Date().toISOString() }],
-            `${retryContextNote}\n\nFind alternative to failed action: ${action.description}. Error: ${errorMessage}`
-          )
+      // Generate alternative using UnifiedBrainService
+      const alternative = await this.unifiedBrainService.generateAction(
+        alternativeContext,
+        [{ action, timestamp: new Date().toISOString() }],
+        `${retryContextNote}\n\nFind alternative to failed action: ${action.description}. Error: ${errorMessage}`
+      )
 
       // Validate alternative is different from original
       if (alternative.action === action.action && alternative.selector === action.selector) {
