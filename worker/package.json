@@ -1,0 +1,49 @@
+{
+  "name": "testlattice-worker",
+  "version": "1.0.0",
+  "description": "Worker service for processing test jobs",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@pinecone-database/pinecone": "^1.1.0",
+    "@sentry/node": "^7.120.4",
+    "@sentry/profiling-node": "^10.25.0",
+    "@supabase/ssr": "^0.7.0",
+    "@supabase/supabase-js": "^2.38.0",
+    "@types/pngjs": "^6.0.5",
+    "@wdio/appium-service": "^9.20.1",
+    "appium": "^2.1.1",
+    "axios": "^1.6.0",
+    "bullmq": "^4.15.0",
+    "cheerio": "^1.1.2",
+    "dotenv": "^17.2.3",
+    "ioredis": "^5.3.2",
+    "livekit-client": "^2.5.3",
+    "livekit-server-sdk": "^2.5.3",
+    "node-fetch": "^2.7.0",
+    "pixelmatch": "^7.1.0",
+    "playwright": "^1.40.0",
+    "pngjs": "^7.0.0",
+    "sharp": "^0.32.6",
+    "webdriverio": "^9.20.1",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/jest": "^29.5.8",
+    "@types/node": "^20.0.0",
+    "@types/node-fetch": "^2.6.13",
+    "@typescript-eslint/eslint-plugin": "^6.10.0",
+    "@typescript-eslint/parser": "^6.10.0",
+    "eslint": "^8.50.0",
+    "jest": "^29.7.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.2.0"
+  }
+}
