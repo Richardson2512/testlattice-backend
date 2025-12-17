@@ -41,12 +41,13 @@ next-env.d.ts
 *~
 
 # Backend directories (not part of frontend repo)
-api/
-worker/
+# Temporarily commented for backend push
+# api/
+# worker/
 *.md
 !README.md
 !QUICK_START_GUIDE.md
 !FRONTEND_IMPLEMENTATION_COMPLETE.md
-docker-compose.yml
-start-dev.*
-verify-setup.js
+# docker-compose.yml
+# start-dev.*
+# verify-setup.js
