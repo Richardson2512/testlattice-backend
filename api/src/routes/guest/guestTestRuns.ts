@@ -2,7 +2,7 @@
 import { FastifyInstance } from 'fastify'
 import { CreateGuestTestRunRequest, TestRunStatus, DeviceProfile, BuildType, GuestTestType, GuestCredentials } from '../../types'
 import { Database } from '../../lib/db'
-import { enqueueTestRun } from '../../lib/queue'
+import { enqueueGuestTestRun } from '../../lib/queue'
 import { AuthenticatedRequest, optionalAuth } from '../../middleware/auth'
 import { validateTestUrl, generateGuestSessionId, getGuestSessionFromCookie, setGuestSessionCookie } from '../../lib/urlValidator'
 import { checkGuestRateLimit } from '../../lib/rateLimiter'
@@ -139,9 +139,9 @@ export async function guestTestRunRoutes(fastify: FastifyInstance) {
         guestSessionId,
       })
 
-      // Enqueue job
+      // Enqueue job to guest-runner queue (separate from main test-runner)
       try {
-        await enqueueTestRun({
+        await enqueueGuestTestRun({
           runId: testRun.id,
           projectId: guestProject.id,
           build: {

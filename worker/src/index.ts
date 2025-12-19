@@ -114,13 +114,35 @@ const supabaseBucket = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts'
 const storageKey = supabaseServiceRoleKey || supabaseAnonKey
 const storageService = new StorageService(supabaseUrl, storageKey, supabaseBucket)
 
+// Initialize Wasabi storage for heavy artifacts (videos, screenshots, traces)
+import { createWasabiStorage, WasabiStorageService } from './services/wasabiStorage'
+import { createTraceService, TraceService } from './services/traceService'
+
+let wasabiStorage: WasabiStorageService | null = null
+let traceService: TraceService
+
+if (config.wasabi.enabled) {
+  wasabiStorage = createWasabiStorage()
+  if (wasabiStorage) {
+    console.log('✅ Wasabi storage initialized (videos, screenshots, traces)')
+  }
+} else {
+  console.log('ℹ️  Wasabi storage disabled (using Supabase for all artifacts)')
+}
+
+traceService = createTraceService(wasabiStorage)
+console.log('✅ TraceService initialized')
+
+// Export for use in processors
+export { wasabiStorage, traceService }
+
 // Lazy Pinecone initialization - only create if API key is available
 // Read directly from process.env to avoid config module caching issues
 let pineconeService: PineconeService | null = null
 function getPineconeService(): PineconeService | null {
   const apiKey = process.env.PINECONE_API_KEY || config.pinecone.apiKey
   const indexName = process.env.PINECONE_INDEX_NAME || config.pinecone.indexName || 'testlattice'
-  
+
   if (!pineconeService && apiKey) {
     try {
       pineconeService = new PineconeService(apiKey, indexName)
@@ -138,7 +160,7 @@ function getPineconeService(): PineconeService | null {
 }
 const playwrightRunner = new PlaywrightRunner(config.testRunners.playwrightGridUrl)
 // Appium is disabled by default - set ENABLE_APPIUM=true to enable
-const appiumRunner = config.testRunners.appiumEnabled 
+const appiumRunner = config.testRunners.appiumEnabled
   ? new AppiumRunner(config.testRunners.appiumUrl)
   : null
 
@@ -166,7 +188,7 @@ if (visionApiKey) {
   console.log('   Note: Set OPENAI_API_KEY to enable GPT-4o vision (selective usage)')
 }
 
-// Create test processor
+// Create test processor for registered users (full diagnosis + execution)
 // AppiumRunner is nullable - mobile tests will be rejected if Appium is disabled
 const testProcessor = new TestProcessor(
   unifiedBrain, // Unified Brain Service (replaces Llama, Qwen, LayeredModelService)
@@ -178,16 +200,31 @@ const testProcessor = new TestProcessor(
   config.vision.validatorInterval
 )
 
+// Create guest test processor (no diagnosis, simplified flow)
+import { GuestTestProcessor } from './processors/GuestTestProcessor'
+const guestProcessor = new GuestTestProcessor(
+  unifiedBrain,
+  storageService,
+  playwrightRunner
+)
+console.log('✅ Guest Test Processor initialized (skip diagnosis, 25-step limit)')
+
 // Worker processor
 async function processTestJob(jobData: JobData) {
-  const { runId } = jobData
-  
+  const { runId, options } = jobData
+
+  // Route guest tests to dedicated processor
+  if (options?.isGuestRun || options?.testMode === 'guest') {
+    console.log(`[${runId}] 🎯 Routing to Guest Test Processor (no diagnosis)`)
+    return await guestProcessor.process(jobData)
+  }
+
   console.log(`[${runId}] Processing test job:`, jobData.build.type, jobData.profile.device)
-  
+
   try {
     // Process test run
     const result = await testProcessor.process(jobData)
-    
+
     // If we're waiting for approval, don't mark the run as completed yet
     if (result.stage === 'diagnosis') {
       console.log(`[${runId}] Diagnosis finished. Awaiting user approval before execution.`)
@@ -199,11 +236,11 @@ async function processTestJob(jobData: JobData) {
         stage: 'diagnosis',
       }
     }
-    
+
     // Update test run status via API
     const apiUrl = config.api.url || process.env.API_URL || 'http://localhost:3001'
     const updateStatus = result.success ? TestRunStatus.COMPLETED : TestRunStatus.FAILED
-    
+
     try {
       const fetch = (await import('node-fetch')).default
       await fetch(`${apiUrl}/api/tests/${runId}`, {
@@ -218,12 +255,12 @@ async function processTestJob(jobData: JobData) {
     } catch (apiError) {
       console.error(`[${runId}] Failed to update API:`, apiError)
     }
-    
+
     console.log(`[${runId}] Test run ${result.success ? 'completed' : 'failed'}:`, {
       steps: result.steps.length,
       artifacts: result.artifacts.length,
     })
-    
+
     return {
       success: result.success,
       runId,
@@ -233,7 +270,7 @@ async function processTestJob(jobData: JobData) {
     }
   } catch (error: any) {
     console.error(`[${runId}] Test job failed:`, error)
-    
+
     // Capture error in Sentry (if configured)
     if (config.sentry.dsn) {
       try {
@@ -255,7 +292,7 @@ async function processTestJob(jobData: JobData) {
         console.warn('Failed to capture error in Sentry:', sentryError)
       }
     }
-    
+
     // Update test run status to failed
     const apiUrl = process.env.API_URL || 'http://localhost:3001'
     try {
@@ -282,7 +319,7 @@ async function processTestJob(jobData: JobData) {
         }
       }
     }
-    
+
     throw error
   }
 }
@@ -300,30 +337,69 @@ try {
       concurrency: config.worker.concurrency || 5,
     }
   )
-  
-  console.log('✅ Worker created successfully')
+
+  console.log('✅ Main worker (test-runner) created successfully')
 } catch (error: any) {
-  console.error('❌ Failed to create worker:', error.message)
+  console.error('❌ Failed to create main worker:', error.message)
   process.exit(1)
 }
 
-// Worker event handlers
+// Create separate guest worker for guest-runner queue
+// This provides isolation from main test processing
+let guestWorker: Worker<JobData> | undefined
+try {
+  guestWorker = new Worker<JobData>(
+    'guest-runner',
+    async (job: any) => {
+      console.log(`[${job.data.runId}] 🎯 Guest worker processing job`)
+      return await guestProcessor.process(job.data)
+    },
+    {
+      connection,
+      concurrency: 3, // Lower concurrency for guest tests
+    }
+  )
+
+  console.log('✅ Guest worker (guest-runner) created successfully')
+} catch (error: any) {
+  console.error('❌ Failed to create guest worker:', error.message)
+  // Don't exit - main worker can still run
+  console.warn('⚠️  Guest tests will not be processed')
+}
+
+// Main worker event handlers
 worker.on('completed', (job: any) => {
-  console.log(`✓ Job ${job.id} completed successfully`)
+  console.log(`✓ Main job ${job.id} completed successfully`)
 })
 
 worker.on('failed', (job: any, err: Error) => {
-  console.error(`✗ Job ${job?.id} failed:`, err?.message)
+  console.error(`✗ Main job ${job?.id} failed:`, err?.message)
 })
 
 worker.on('active', (job: any) => {
-  console.log(`→ Job ${job.id} started processing`)
+  console.log(`→ Main job ${job.id} started processing`)
 })
 
-// Graceful shutdown
+// Guest worker event handlers
+if (guestWorker) {
+  guestWorker.on('completed', (job: any) => {
+    console.log(`✓ Guest job ${job.id} completed successfully`)
+  })
+
+  guestWorker.on('failed', (job: any, err: Error) => {
+    console.error(`✗ Guest job ${job?.id} failed:`, err?.message)
+  })
+
+  guestWorker.on('active', (job: any) => {
+    console.log(`→ Guest job ${job.id} started processing`)
+  })
+}
+
+// Graceful shutdown - close both workers
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully')
   await worker.close()
+  if (guestWorker) await guestWorker.close()
   await connection.quit()
   process.exit(0)
 })
@@ -331,6 +407,7 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   console.log('SIGINT received, shutting down gracefully')
   await worker.close()
+  if (guestWorker) await guestWorker.close()
   await connection.quit()
   process.exit(0)
 })
@@ -351,19 +428,19 @@ async function startWorker() {
           const timeout = setTimeout(() => {
             reject(new Error('Redis connection timeout'))
           }, 10000) // 10 second timeout
-          
+
           const onReady = () => {
             clearTimeout(timeout)
             connection.removeListener('error', onError)
             resolve()
           }
-          
+
           const onError = (err: Error) => {
             clearTimeout(timeout)
             connection.removeListener('ready', onReady)
             reject(err)
           }
-          
+
           if (connection.status === 'ready') {
             clearTimeout(timeout)
             resolve()
@@ -386,19 +463,19 @@ async function startWorker() {
             const timeout = setTimeout(() => {
               reject(new Error('Redis connection timeout'))
             }, 10000) // 10 second timeout
-            
+
             const onReady = () => {
               clearTimeout(timeout)
               connection.removeListener('error', onError)
               resolve()
             }
-            
+
             const onError = (err: Error) => {
               clearTimeout(timeout)
               connection.removeListener('ready', onReady)
               reject(err)
             }
-            
+
             if (connection.status === 'ready') {
               clearTimeout(timeout)
               resolve()
@@ -412,13 +489,13 @@ async function startWorker() {
         }
       }
     }
-    
+
     // Verify connection with ping
     const pingResult = await connection.ping()
     if (pingResult !== 'PONG') {
       throw new Error('Redis ping returned unexpected result')
     }
-    
+
     console.log('✅ Redis ping successful')
     console.log('✅ Worker started, waiting for jobs...')
     console.log(`📊 Concurrency: ${config.worker.concurrency || 5}`)
@@ -429,7 +506,7 @@ async function startWorker() {
       console.log(`📱 Appium: Disabled (set ENABLE_APPIUM=true to enable)`)
     }
     console.log(`🔗 API URL: ${config.api.url || 'http://localhost:3001'}`)
-    
+
     // Log optional services status (check process.env directly to avoid config caching)
     const pineconeApiKey = process.env.PINECONE_API_KEY || config.pinecone.apiKey
     if (pineconeApiKey) {
@@ -437,14 +514,14 @@ async function startWorker() {
     } else {
       console.log('ℹ️  Pinecone: Not configured (optional)')
     }
-    
+
     const sentryDsn = process.env.SENTRY_DSN || config.sentry.dsn
     if (sentryDsn) {
       console.log('✅ Sentry: Configured')
     } else {
       console.log('ℹ️  Sentry: Not configured (optional)')
     }
-    
+
   } catch (err: any) {
     // Handle specific error cases
     if (err.message.includes('already connecting') || err.message.includes('already connected')) {

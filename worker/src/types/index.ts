@@ -64,23 +64,23 @@ export interface DesignSpec {
   errorColor?: string         // e.g., '#EA4335'
   successColor?: string       // e.g., '#34A853'
   warningColor?: string       // e.g., '#FBBC04'
-  
+
   // Typography
   primaryFontFamily?: string   // e.g., 'Roboto, sans-serif'
   secondaryFontFamily?: string // e.g., 'Google Sans, sans-serif'
   headingFontFamily?: string   // e.g., 'Google Sans, sans-serif'
   bodyFontSize?: string        // e.g., '14px' or '1rem'
   headingFontSize?: string     // e.g., '24px' or '1.5rem'
-  
+
   // Spacing
   baseSpacingUnit?: number     // e.g., 8 (for 8px grid system)
   minSpacing?: number          // Minimum spacing between elements (px)
-  
+
   // Component Standards
   buttonBorderRadius?: string  // e.g., '4px'
   inputBorderRadius?: string   // e.g., '4px'
   cardBorderRadius?: string    // e.g., '8px'
-  
+
   // Optional: Allow per-component overrides
   componentSpecs?: {
     buttons?: {
@@ -105,7 +105,7 @@ export interface TestOptions {
   stressTest?: boolean
   coverage?: string[]
   maxSteps?: number
-  testMode?: 'single' | 'multi' | 'all' | 'monkey'
+  testMode?: 'single' | 'multi' | 'all' | 'monkey' | 'guest'
   allPages?: boolean
   monkeyMode?: boolean
   monkeyConfig?: {
@@ -117,6 +117,14 @@ export interface TestOptions {
   approvalPolicy?: ApprovalPolicy
   designSpec?: DesignSpec  // Optional design specification for visual consistency checks
   browserMatrix?: Array<'chromium' | 'firefox' | 'webkit'>  // Defaults to ['chromium'] for cross-browser testing
+  // Guest test options
+  isGuestRun?: boolean
+  guestTestType?: 'login' | 'signup' | 'visual' | 'navigation' | 'form' | 'accessibility'
+  guestCredentials?: {
+    username?: string
+    email?: string
+    password?: string
+  }
 }
 
 export interface DiagnosisComponentInsight {

@@ -137,6 +137,16 @@ export const config = {
     livekitApiSecret: optionalEnv('LIVEKIT_API_SECRET', ''),
   },
 
+  // Wasabi S3 Storage (for heavy artifacts: videos, screenshots, traces)
+  wasabi: {
+    accessKey: optionalEnv('WASABI_ACCESS_KEY', ''),
+    secretKey: optionalEnv('WASABI_SECRET_KEY', ''),
+    bucket: optionalEnv('WASABI_BUCKET', 'livestreamvideo'),
+    region: optionalEnv('WASABI_REGION', 'us-central-1'),
+    endpoint: optionalEnv('WASABI_ENDPOINT', 'https://s3.us-central-1.wasabisys.com'),
+    enabled: !!(process.env.WASABI_ACCESS_KEY && process.env.WASABI_SECRET_KEY),
+  },
+
   // Intelligent Retry Layer (IRL) configuration
   irl: {
     maxRetries: parseInt(optionalEnv('IRL_MAX_RETRIES', '3'), 10),

@@ -7,12 +7,13 @@ import { JobData } from '../types'
 // Lazy Redis connection - only create when needed
 let connection: IORedis | null = null
 let testQueue: Queue<JobData> | null = null
+let guestQueue: Queue<JobData> | null = null // Separate queue for guest tests
 
 function getRedisConnection(): IORedis {
   if (!connection) {
     // Read directly from process.env to avoid config module caching issues
     const redisUrl = process.env.REDIS_URL || config.redis.url || 'redis://localhost:6379'
-    
+
     try {
       connection = new IORedis(redisUrl, {
         maxRetriesPerRequest: null,
@@ -27,11 +28,11 @@ function getRedisConnection(): IORedis {
         },
         lazyConnect: true,
       })
-      
+
       connection.on('error', (err) => {
         console.warn('Redis connection error:', err.message)
       })
-      
+
       connection.connect().catch((err) => {
         console.warn('Redis not available. Queue functionality will be limited.')
         console.warn('Redis connection error:', err.message)
@@ -81,22 +82,65 @@ function getQueue(): Queue<JobData> {
   return testQueue
 }
 
+/**
+ * Get or create the guest test queue
+ * Separate from main test queue for:
+ * - Independent scaling
+ * - Isolated processing
+ * - Different retry/timeout settings
+ */
+function getGuestQueue(): Queue<JobData> {
+  if (!guestQueue) {
+    try {
+      guestQueue = new Queue<JobData>('guest-runner', {
+        connection: getRedisConnection(),
+        defaultJobOptions: {
+          attempts: 2, // Fewer retries for guests
+          backoff: {
+            type: 'exponential',
+            delay: 1000,
+          },
+          removeOnComplete: {
+            age: 1800, // Keep completed jobs for 30 minutes (shorter for guests)
+            count: 500,
+          },
+          removeOnFail: {
+            age: 3600, // Keep failed jobs for 1 hour (shorter for guests)
+          },
+        },
+      })
+      console.log('✅ Guest queue (guest-runner) initialized')
+    } catch (error: any) {
+      console.warn('Failed to create guest queue:', error.message)
+      guestQueue = new Queue<JobData>('guest-runner', {
+        connection: getRedisConnection(),
+        defaultJobOptions: {},
+      })
+    }
+  }
+  return guestQueue
+}
+
+/**
+ * Enqueue a registered user test run
+ * Uses 'test-runner' queue → processed by main TestProcessor
+ */
 export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?: boolean }) {
   try {
     const queue = getQueue()
     const connection = getRedisConnection()
-    
+
     // Verify Redis connection before adding job
     await connection.ping()
-    
+
     const jobId = opts?.allowDuplicate ? undefined : `test-${jobData.runId}`
 
     const job = await queue.add('test-run', jobData, {
       priority: 1,
       jobId,
     })
-    
-    console.log(`✅ Test run ${jobData.runId} enqueued successfully (Job ID: ${job.id})`)
+
+    console.log(`✅ Test run ${jobData.runId} enqueued to test-runner (Job ID: ${job.id})`)
     return job
   } catch (error: any) {
     console.error('❌ Failed to enqueue test run:', error.message)
@@ -108,15 +152,52 @@ export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?:
   }
 }
 
+/**
+ * Enqueue a guest test run
+ * Uses 'guest-runner' queue → processed by GuestTestProcessor
+ * Separate queue for:
+ * - Isolated processing (doesn't compete with registered users)
+ * - Independent scaling
+ * - Shorter retention periods
+ */
+export async function enqueueGuestTestRun(jobData: JobData) {
+  try {
+    const queue = getGuestQueue()
+    const connection = getRedisConnection()
+
+    // Verify Redis connection before adding job
+    await connection.ping()
+
+    const jobId = `guest-${jobData.runId}`
+
+    const job = await queue.add('guest-test-run', jobData, {
+      priority: 1,
+      jobId,
+    })
+
+    console.log(`✅ Guest test ${jobData.runId} enqueued to guest-runner (Job ID: ${job.id})`)
+    return job
+  } catch (error: any) {
+    console.error('❌ Failed to enqueue guest test run:', error.message)
+    throw new Error(`Guest queue is not available: ${error.message}`)
+  }
+}
+
 export async function getJobStatus(jobId: string) {
-  const queue = getQueue()
-  const job = await queue.getJob(jobId)
+  // Check both queues
+  const mainQueue = getQueue()
+  const guestQ = getGuestQueue()
+
+  let job = await mainQueue.getJob(jobId)
+  if (!job) {
+    job = await guestQ.getJob(jobId)
+  }
   if (!job) return null
-  
+
   const state = await job.getState()
   const progress = job.progress
   const data = job.data
-  
+
   return {
     id: job.id,
     state,
@@ -125,4 +206,3 @@ export async function getJobStatus(jobId: string) {
     failedReason: job.failedReason,
   }
 }
-
