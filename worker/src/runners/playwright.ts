@@ -533,12 +533,24 @@ export class PlaywrightRunner {
           validateUrlOrThrow(action.value)
 
           console.log('Playwright: Navigating to:', action.value)
-          await page.goto(action.value, { waitUntil: 'networkidle', timeout: 30000 })
+          // Use 'load' instead of 'networkidle' - networkidle hangs on sites with 
+          // continuous network activity (analytics, tracking, websockets, etc.)
+          try {
+            await page.goto(action.value, { waitUntil: 'load', timeout: 30000 })
+          } catch (navError: any) {
+            // If 'load' times out, try with 'domcontentloaded' as fallback
+            if (navError.message?.includes('timeout')) {
+              console.warn('Playwright: Load timeout, retrying with domcontentloaded')
+              await page.goto(action.value, { waitUntil: 'domcontentloaded', timeout: 15000 })
+            } else {
+              throw navError
+            }
+          }
 
           // Note: Cookie banner detection is handled in testProcessor after navigation
           // Don't detect here to avoid duplicate detection
-          // Just wait for page to load
-          await page.waitForTimeout(500)
+          // Wait for page to stabilize
+          await page.waitForTimeout(1000)
           break
 
         case 'wait':
