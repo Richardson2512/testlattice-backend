@@ -1,0 +1,25 @@
+src/instrument.ts(14,7): error TS2353: Object literal may only specify known properties, and 'enableLogs' does not exist in type 'NodeOptions'.
+src/runners/appium.ts(2,18): error TS2305: Module '"webdriverio"' has no exported member 'RemoteOptions'.
+src/runners/appium.ts(11,12): error TS2315: Type 'Browser' is not generic.
+src/runners/appium.ts(258,37): error TS2315: Type 'Browser' is not generic.
+src/runners/playwright/actions/interaction.ts(82,32): error TS7006: Parameter 'x' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(82,35): error TS7006: Parameter 'y' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(86,23): error TS2554: Expected 1-2 arguments, but got 3.
+src/runners/playwright/actions/interaction.ts(123,36): error TS7006: Parameter 'x' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(123,39): error TS7006: Parameter 'y' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(127,27): error TS2554: Expected 1-2 arguments, but got 3.
+src/services/enhancedTestability.ts(356,9): error TS2322: Type '{ name: string; confidence: number; warnings: { type: string; message: string; suggestion: string; }[]; }[]' is not assignable to type 'string[]'.
+  Type '{ name: string; confidence: number; warnings: { type: string; message: string; suggestion: string; }[]; }' is not assignable to type 'string'.
+src/services/enhancedTestability.ts(370,9): error TS2322: Type '{ name: string; blockers: { type: string; message: string; suggestion: string; }[]; }[]' is not assignable to type 'string[]'.
+  Type '{ name: string; blockers: { type: string; message: string; suggestion: string; }[]; }' is not assignable to type 'string'.
+src/services/intelligentRetryLayer.ts(333,86): error TS2554: Expected 0 arguments, but got 1.
+src/services/learningService.ts(34,8): error TS7006: Parameter 'sel' implicitly has an 'any' type.
+src/services/learningService.ts(34,13): error TS7006: Parameter 'coords' implicitly has an 'any' type.
+src/services/learningService.ts(82,7): error TS2554: Expected 1-2 arguments, but got 3.
+src/services/learningService.ts(86,47): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'BinaryLike'.
+src/services/learningService.ts(102,8): error TS7006: Parameter 'sel' implicitly has an 'any' type.
+src/services/learningService.ts(102,13): error TS7006: Parameter 'coords' implicitly has an 'any' type.
+src/services/learningService.ts(159,65): error TS2304: Cannot find name 'tag'.
+src/services/learningService.ts(164,7): error TS2554: Expected 1-2 arguments, but got 3.
+src/services/learningService.ts(167,32): error TS18046: 'extracted' is of type 'unknown'.
+src/services/learningService.ts(168,32): error TS18046: 'extracted' is of type 'unknown'.
