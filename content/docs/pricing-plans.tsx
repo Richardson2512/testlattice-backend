@@ -2,7 +2,7 @@ export default function PricingPlansContent() {
   return (
     <article>
       <h1>Plans and Usage Limits Explained Simply</h1>
-      
+
       <p style={{ fontSize: '1.125rem', color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: 1.7 }}>
         <strong>Rihario offers four plans: Free, Starter, Indie, and Pro.</strong> Plans differ by number of tests per month, visual test limits, and available features. Limits reset monthly. You can upgrade or downgrade anytime. Here's what each plan includes.
       </p>
@@ -74,7 +74,6 @@ export default function PricingPlansContent() {
         <li><strong>Mobile device testing</strong> - Test on mobile viewports</li>
         <li><strong>All features</strong> - Everything included</li>
         <li><strong>Export capabilities</strong> - Export results (add-on)</li>
-        <li><strong>Advanced features</strong> - Scheduling and more</li>
         <li><strong>Priority support</strong> - Fastest response times</li>
       </ul>
 
@@ -175,7 +174,6 @@ export default function PricingPlansContent() {
         <li><strong>Additional tests</strong> - Buy more tests beyond plan limits</li>
         <li><strong>Additional visual tests</strong> - Buy more visual tests</li>
         <li><strong>Result exports</strong> - Export test results (Pro plan)</li>
-        <li><strong>Advanced scheduling</strong> - Schedule tests automatically</li>
       </ul>
 
       <p>
