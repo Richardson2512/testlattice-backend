@@ -3,6 +3,11 @@ import { VisionContext, VisionElement, TestOptions, DiagnosisComponentInsight, C
 import { UnifiedBrainService } from '../services/unifiedBrainService'
 import { ComprehensiveTestingService } from '../services/comprehensiveTesting'
 import { Page } from 'playwright'
+import {
+  assertPreflightCompletedBeforeScreenshot,
+  assertPreflightCompletedBeforeDOMSnapshot,
+  assertPreflightCompletedBeforeAIAnalysis,
+} from '../services/preflightInvariants'
 
 export interface SynthesizeContextParams {
   sessionId: string
@@ -77,12 +82,25 @@ export class ContextSynthesizer {
       browserType
     } = params
 
+    // HARD INVARIANT: Preflight must be completed before screenshot/DOM capture
+    // EXCEPTION: stepNumber === 0 indicates preflight context synthesis (allowed)
+    if (stepNumber !== 0) {
+      assertPreflightCompletedBeforeScreenshot(runId, 'ContextSynthesizer.synthesizeContext')
+      assertPreflightCompletedBeforeDOMSnapshot(runId, 'ContextSynthesizer.synthesizeContext')
+    }
+
     // Capture screenshot and DOM snapshot
     const runner = isMobile ? appiumRunner : playwrightRunner
     const screenshot = await runner.captureScreenshot(sessionId)
     const domSnapshot = await (isMobile
       ? appiumRunner.getPageSource(sessionId)
       : playwrightRunner.getDOMSnapshot(sessionId))
+
+    // HARD INVARIANT: Preflight must be completed before AI analysis
+    // EXCEPTION: stepNumber === 0 indicates preflight context synthesis (allowed)
+    if (stepNumber !== 0) {
+      assertPreflightCompletedBeforeAIAnalysis(runId, 'ContextSynthesizer.synthesizeContext')
+    }
 
     // Collect comprehensive testing data (only for web, not mobile)
     let comprehensiveData: ComprehensiveTestResults | null = null

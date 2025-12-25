@@ -6,6 +6,7 @@ interface HealingCandidate {
   selector: string
   strategy: SelfHealingInfo['strategy']
   note: string
+  confidence: number
 }
 
 export class SelfHealingService {
@@ -24,7 +25,7 @@ export class SelfHealingService {
 
     const candidates = this.buildHealingCandidates(action)
     const tried = new Set<string>()
-    
+
     for (const candidate of candidates) {
       if (!candidate.selector || tried.has(candidate.selector)) {
         continue
@@ -38,12 +39,13 @@ export class SelfHealingService {
           originalSelector,
           healedSelector: candidate.selector,
           note: candidate.note,
+          confidence: candidate.confidence,
         }
       } catch {
         continue
       }
     }
-    
+
     return null
   }
 
@@ -53,12 +55,12 @@ export class SelfHealingService {
   buildHealingCandidates(action: LLMAction): HealingCandidate[] {
     const selector = action.selector || ''
     const candidates: HealingCandidate[] = []
-    
+
     candidates.push(...this.getLocatorFallbacks(selector))
     candidates.push(...this.buildTextHeuristics(action))
     candidates.push(...this.buildAttributeHeuristics(selector))
     candidates.push(...this.buildStructuralHeuristics(selector))
-    
+
     return candidates
   }
 
@@ -77,6 +79,7 @@ export class SelfHealingService {
         selector: xpath,
         strategy: 'fallback',
         note: `Converted :has-text("${text}") selector to XPath text match`,
+        confidence: 0.95,
       })
     }
     return fallbacks
@@ -94,11 +97,13 @@ export class SelfHealingService {
         selector: `xpath=//*[self::button or self::a or @role="button"][contains(normalize-space(.), "${escaped}")]`,
         strategy: 'text',
         note: `Matched by visible text "${text}"`,
+        confidence: 0.9,
       },
       {
         selector: `xpath=//*[contains(@aria-label, "${escaped}") or contains(@title, "${escaped}")]`,
         strategy: 'text',
         note: `Matched by aria-label/title containing "${text}"`,
+        confidence: 0.9,
       },
     ]
   }
@@ -109,10 +114,10 @@ export class SelfHealingService {
   private buildAttributeHeuristics(selector: string): HealingCandidate[] {
     const candidates: HealingCandidate[] = []
     if (!selector) return candidates
-    
+
     const tagMatch = selector.match(/^[a-zA-Z]+/)
     const tag = tagMatch ? tagMatch[0] : ''
-    
+
     const idMatch = selector.match(/#([\w-]+)/)
     if (idMatch) {
       const rawId = idMatch[1]
@@ -123,10 +128,11 @@ export class SelfHealingService {
           selector: healed,
           strategy: 'attribute',
           note: `Used ID prefix "${stablePrefix}" to match dynamic IDs`,
+          confidence: 0.8,
         })
       }
     }
-    
+
     const dataAttrMatch = selector.match(/\[(data-[^\]=]+)=["']?([^"' \]]+)["']?\]/)
     if (dataAttrMatch) {
       const attrName = dataAttrMatch[1]
@@ -137,10 +143,11 @@ export class SelfHealingService {
           selector: `[${attrName}^="${trimmed}"]`,
           strategy: 'attribute',
           note: `Used ${attrName} prefix "${trimmed}" to bypass dynamic suffixes`,
+          confidence: 0.8,
         })
       }
     }
-    
+
     return candidates
   }
 
@@ -154,15 +161,16 @@ export class SelfHealingService {
       .replace(/\[data-[^\]]+\]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
-    
+
     if (!stripped || stripped === selector) {
       return []
     }
-    
+
     return [{
       selector: stripped,
       strategy: 'position',
       note: 'Removed dynamic IDs and data attributes to rely on structural path',
+      confidence: 0.5,
     }]
   }
 
@@ -175,14 +183,14 @@ export class SelfHealingService {
       this.extractQuotedText(action.description || ''),
       action.description,
     ].filter(Boolean) as string[]
-    
+
     for (const candidate of candidates) {
       const cleaned = candidate.trim()
       if (cleaned && cleaned.length <= 60) {
         return cleaned
       }
     }
-    
+
     return null
   }
 

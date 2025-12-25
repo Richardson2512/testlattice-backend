@@ -108,6 +108,7 @@ export interface CreateGuestTestRunRequest {
 export interface TestRun {
   id: string;
   projectId: string;
+  name?: string; // Custom name
   status: TestRunStatus;
   build: Build;
   profile: TestProfile;
@@ -261,6 +262,10 @@ export interface JobData {
   build: Build;
   profile: TestProfile;
   options?: TestOptions;
+  // Parallel browser testing support
+  browserType?: 'chromium' | 'firefox' | 'webkit'; // Specific browser for this job
+  parentRunId?: string; // Original runId if this is a browser-specific job from a matrix
+  browserMatrix?: Array<'chromium' | 'firefox' | 'webkit'>; // Full browser matrix (for reference)
 }
 
 export interface Project {

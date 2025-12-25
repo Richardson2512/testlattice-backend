@@ -121,6 +121,15 @@ export interface ThirdPartyDependency {
     description: string
 }
 
+export type EvaluationStatus = 'pass' | 'warning' | 'fail' | 'soft-fail'
+
+export interface EvaluationResult {
+    status: EvaluationStatus
+    score: number
+    issues: string[]
+    thresholds: Record<string, { actual: any; limit: any; status: EvaluationStatus }>
+}
+
 export interface ComprehensiveTestResults {
     consoleErrors: ConsoleError[]
     networkErrors: NetworkError[]
@@ -131,6 +140,7 @@ export interface ComprehensiveTestResults {
     security?: SecurityIssue[]
     seo?: SEOIssue[]
     thirdPartyDependencies?: ThirdPartyDependency[]
+    evaluation?: EvaluationResult
     wcagScore?: {
         level: 'A' | 'AA' | 'AAA' | 'none'
         score: number

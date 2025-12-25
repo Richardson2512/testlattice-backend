@@ -13,31 +13,38 @@ export interface ModelConfig {
     model: string
     temperature: number
     maxTokens: number
+    clientLabel?: string  // Optional label for token tracking (e.g., 'Guest', 'Registered')
 }
 
 export class ModelClient {
     private config: ModelConfig
+    private clientLabel: string
 
-    // Metrics tracking
+    // Metrics tracking (ADMIN ONLY - not exposed to users)
     private metrics = {
         totalCalls: 0,
         success: 0,
         failures: 0,
+        // Token usage tracking
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        totalTokens: 0,
     }
 
     constructor(config: ModelConfig) {
         this.config = config
+        this.clientLabel = config.clientLabel || 'Default'
 
         if (DEBUG_LLM) {
-            console.log('ModelClient initialized:')
+            console.log(`ModelClient [${this.clientLabel}] initialized:`)
             console.log(`  Model: ${config.model} at ${config.apiUrl}`)
         }
     }
 
     /**
-     * Call GPT-5 Mini model with same-model retry envelope
-     * Retries transient failures (429, network) once with same model and prompt
-     * Maximum 1 retry with 200-400ms randomized backoff
+     * Call GPT-5 Mini model with exponential backoff retry envelope
+     * Retries transient failures (429, network) up to 3 times
+     * Backoff: 1s → 2s → 4s (exponential)
      */
     async call(
         prompt: string,
@@ -45,7 +52,8 @@ export class ModelClient {
         task: 'action' | 'parse' | 'analyze' | 'synthesize' | 'heal'
     ): Promise<ModelCallResult> {
         this.metrics.totalCalls++
-        const maxRetries = 1
+        const maxRetries = 3
+        const baseDelayMs = 1000 // 1 second initial delay
         let lastError: Error | null = null
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -92,28 +100,30 @@ export class ModelClient {
                     }
                 }
 
-                // Retryable errors: 429 (rate limit), network errors, timeouts
-                const isRetryable = statusCode === 429 || 
-                                   error.code === 'ECONNRESET' || 
-                                   error.code === 'ETIMEDOUT' ||
-                                   error.code === 'ENOTFOUND' ||
-                                   (error.response === undefined && attempt < maxRetries)
+                // Retryable errors: 429 (rate limit), 500/502/503 (server), network errors, timeouts
+                const isRetryable = statusCode === 429 ||
+                    statusCode === 500 ||
+                    statusCode === 502 ||
+                    statusCode === 503 ||
+                    error.code === 'ECONNRESET' ||
+                    error.code === 'ETIMEDOUT' ||
+                    error.code === 'ENOTFOUND' ||
+                    (error.response === undefined && attempt < maxRetries)
 
                 if (isRetryable && attempt < maxRetries) {
-                    // Randomized backoff: 200-400ms
-                    const backoffMs = 200 + Math.random() * 200
-                    if (DEBUG_LLM) {
-                        console.warn(`[ModelClient] GPT-5 Mini call failed (attempt ${attempt + 1}/${maxRetries + 1}): ${errorMessage}. Retrying in ${backoffMs.toFixed(0)}ms...`)
-                    }
+                    // Exponential backoff: 1s, 2s, 4s (with ±10% jitter to avoid thundering herd)
+                    const exponentialDelay = baseDelayMs * Math.pow(2, attempt)
+                    const jitter = exponentialDelay * 0.1 * (Math.random() - 0.5) // ±10% jitter
+                    const backoffMs = Math.round(exponentialDelay + jitter)
+
+                    console.log(`[ModelClient][${this.clientLabel}] Rate limit or transient error (${statusCode || error.code}). Retry ${attempt + 1}/${maxRetries} in ${backoffMs}ms...`)
                     await this.delay(backoffMs)
                     continue
                 }
 
                 // Final failure or non-retryable error
                 this.metrics.failures++
-                if (DEBUG_LLM) {
-                    console.warn(`[ModelClient] GPT-5 Mini call failed after ${attempt + 1} attempt(s): ${errorMessage}`)
-                }
+                console.warn(`[ModelClient][${this.clientLabel}] GPT-5 Mini call failed after ${attempt + 1} attempt(s): ${errorMessage}`)
                 throw new Error(`GPT-5 Mini call failed after ${attempt + 1} attempt(s): ${errorMessage}`)
             }
         }
@@ -192,6 +202,16 @@ export class ModelClient {
                 throw new Error('No response from GPT-5 Mini')
             }
 
+            // ADMIN ONLY: Log token usage for cost tracking
+            const usage = response.data.usage
+            if (usage) {
+                this.metrics.totalPromptTokens += usage.prompt_tokens || 0
+                this.metrics.totalCompletionTokens += usage.completion_tokens || 0
+                this.metrics.totalTokens += usage.total_tokens || 0
+
+                console.log(`[TokenUsage][${this.clientLabel}] Call: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}, total=${usage.total_tokens} | Cumulative: ${this.metrics.totalTokens} tokens`)
+            }
+
             return content
         } catch (error: any) {
             // Provide clearer error messages
@@ -211,7 +231,108 @@ export class ModelClient {
     }
 
     /**
-     * Get metrics for monitoring
+     * Call GPT-4o with vision (screenshot analysis)
+     * Uses separate vision model for image understanding
+     */
+    async callWithVision(
+        screenshotBase64: string,
+        prompt: string,
+        systemPrompt: string
+    ): Promise<ModelCallResult> {
+        this.metrics.totalCalls++
+
+        // Use GPT-4o for vision (same model as VisionValidatorService)
+        const visionModel = process.env.VISION_MODEL || 'gpt-4o'
+        const visionEndpoint = process.env.VISION_MODEL_ENDPOINT || 'https://api.openai.com/v1/chat/completions'
+
+        // Validate API key
+        if (!this.config.apiKey) {
+            throw new Error('OPENAI_API_KEY is required for vision calls')
+        }
+
+        const messages = [
+            {
+                role: 'system',
+                content: systemPrompt
+            },
+            {
+                role: 'user',
+                content: [
+                    {
+                        type: 'text',
+                        text: prompt
+                    },
+                    {
+                        type: 'image_url',
+                        image_url: {
+                            url: `data:image/png;base64,${screenshotBase64}`,
+                            detail: 'high' // Use high detail for accurate element detection
+                        }
+                    }
+                ]
+            }
+        ]
+
+        try {
+            const response = await axios.post(
+                visionEndpoint,
+                {
+                    model: visionModel,
+                    messages,
+                    response_format: { type: 'json_object' },
+                    temperature: 0.2, // Lower temperature for more consistent element detection
+                    max_tokens: 4096,
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.config.apiKey}`,
+                        'Content-Type': 'application/json',
+                    },
+                    timeout: 60000,
+                }
+            )
+
+            const content = response.data.choices?.[0]?.message?.content
+            if (!content) {
+                throw new Error('No response from GPT-4o Vision')
+            }
+
+            // Track token usage
+            const usage = response.data.usage
+            if (usage) {
+                this.metrics.totalPromptTokens += usage.prompt_tokens || 0
+                this.metrics.totalCompletionTokens += usage.completion_tokens || 0
+                this.metrics.totalTokens += usage.total_tokens || 0
+                console.log(`[TokenUsage][${this.clientLabel}][Vision] Call: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}, total=${usage.total_tokens}`)
+            }
+
+            this.metrics.success++
+            return {
+                content,
+                model: 'gpt-5-mini' as const, // Type compatibility
+                attempt: 1,
+                fallbackUsed: false,
+            }
+        } catch (error: any) {
+            this.metrics.failures++
+            const statusCode = error.response?.status
+            const errorMessage = error.response?.data?.error?.message || error.message
+
+            console.warn(`[ModelClient][${this.clientLabel}] Vision call failed (${statusCode}): ${errorMessage}`)
+
+            // Return empty result instead of throwing - allow DOM-only fallback
+            return {
+                content: JSON.stringify({ visibleElements: [], error: errorMessage }),
+                model: 'gpt-5-mini' as const,
+                attempt: 1,
+                fallbackUsed: false,
+            }
+        }
+    }
+
+    /**
+     * Get metrics for monitoring (ADMIN ONLY)
+     * Not exposed to users - only visible in server logs and admin dashboards
      */
     getMetrics() {
         const totalCalls = this.metrics.totalCalls
@@ -219,6 +340,11 @@ export class ModelClient {
             ...this.metrics,
             successRate: totalCalls > 0 ? this.metrics.success / totalCalls : 0,
             failureRate: totalCalls > 0 ? this.metrics.failures / totalCalls : 0,
+            // Estimated cost (GPT-5-mini pricing: $0.25/1M input, $2.00/1M output)
+            estimatedCostUSD: (
+                (this.metrics.totalPromptTokens / 1000000) * 0.25 +
+                (this.metrics.totalCompletionTokens / 1000000) * 2.00
+            ).toFixed(6),
         }
     }
 }

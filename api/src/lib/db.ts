@@ -71,7 +71,9 @@ export class Database {
     if (updates.startedAt !== undefined) updateData.started_at = updates.startedAt
     if (updates.completedAt !== undefined) updateData.completed_at = updates.completedAt
     if (updates.duration !== undefined) updateData.duration = updates.duration
+    if (updates.duration !== undefined) updateData.duration = updates.duration
     if (updates.error !== undefined) updateData.error = updates.error
+    if (updates.name !== undefined) updateData.name = updates.name
     if (updates.reportUrl !== undefined) updateData.report_url = updates.reportUrl
     if (updates.artifactsUrl !== undefined) updateData.artifacts_url = updates.artifactsUrl
     if (updates.traceUrl !== undefined) updateData.trace_url = updates.traceUrl
@@ -331,6 +333,7 @@ export class Database {
     return {
       id: row.id,
       projectId: row.project_id,
+      name: row.name,
       status: row.status as TestRunStatus,
       build: row.build,
       profile: row.profile,

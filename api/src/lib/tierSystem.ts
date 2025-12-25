@@ -14,6 +14,7 @@ export interface TierLimits {
   // Browser support
   browsers: Array<'chromium' | 'firefox' | 'webkit'>
   mobileBrowsers: boolean
+  maxParallelBrowsers: number // Maximum browsers that can run in parallel
 
   // Features
   diagnosis: {
@@ -51,6 +52,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxDuration: 5,
     browsers: ['chromium'],
     mobileBrowsers: false,
+    maxParallelBrowsers: 1, // Guest: chromium only
     diagnosis: {
       enabled: false,
     },
@@ -66,7 +68,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
       seo: false,
       visualRegression: false,
     },
-    retentionDays: 1,
+    retentionDays: 2, // 48h
   },
   starter: {
     maxSteps: Infinity, // Changed from 25 to Infinity (dynamic based on diagnosis)
@@ -75,6 +77,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxDuration: 10,
     browsers: ['chromium', 'webkit'],
     mobileBrowsers: false,
+    maxParallelBrowsers: 1, // Starter: single browser only
     diagnosis: {
       enabled: true,
       maxSteps: 3,
@@ -100,6 +103,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxDuration: 15,
     browsers: ['chromium', 'webkit', 'firefox'],
     mobileBrowsers: true,
+    maxParallelBrowsers: 2, // Indie: up to 2 browsers in parallel (user selectable)
     diagnosis: {
       enabled: true,
       maxSteps: 5,
@@ -125,6 +129,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxDuration: 30,
     browsers: ['chromium', 'webkit', 'firefox'],
     mobileBrowsers: true,
+    maxParallelBrowsers: 3, // Pro: all 3 browsers in parallel
     diagnosis: {
       enabled: true,
     },
@@ -149,6 +154,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxDuration: 60,
     browsers: ['chromium', 'webkit', 'firefox'],
     mobileBrowsers: true,
+    maxParallelBrowsers: 3, // Agency: all 3 browsers in parallel
     diagnosis: {
       enabled: true,
     },
@@ -215,13 +221,24 @@ export function validateTierLimits(
     }
   }
 
-  // Validate browser support
+  // Validate browser support and parallel browser limits
   if (options.browserMatrix) {
     const unsupportedBrowsers = options.browserMatrix.filter(
       browser => !limits.browsers.includes(browser as any)
     )
     if (unsupportedBrowsers.length > 0) {
       errors.push(`${tier} tier supports: ${limits.browsers.join(', ')}. Unsupported browsers: ${unsupportedBrowsers.join(', ')}`)
+    }
+
+    // Validate parallel browser limit
+    if (options.browserMatrix.length > limits.maxParallelBrowsers) {
+      errors.push(`${tier} tier supports maximum ${limits.maxParallelBrowsers} parallel browser(s). Requested: ${options.browserMatrix.length}`)
+    }
+
+    // Validate unique browsers
+    const uniqueBrowsers = new Set(options.browserMatrix)
+    if (uniqueBrowsers.size !== options.browserMatrix.length) {
+      errors.push('Browser matrix cannot contain duplicate browsers')
     }
   }
 

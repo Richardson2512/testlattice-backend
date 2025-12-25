@@ -3,7 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { CreateTestRunRequest, TestRunStatus, TestRun, TestArtifact } from '../types'
 import { Database } from '../lib/db'
 import { enqueueTestRun } from '../lib/queue'
-import { authenticate, AuthenticatedRequest } from '../middleware/auth'
+import { authenticate, AuthenticatedRequest, optionalAuth } from '../middleware/auth'
 import { getTestControlWS } from '../index'
 import { createClient } from '@supabase/supabase-js'
 import { config } from '../config/env'
@@ -78,12 +78,12 @@ export async function testRoutes(fastify: FastifyInstance) {
           profile,
           options: normalizedOptions,
         })
-        
+
         // Update status to queued only if enqueue succeeded
         await Database.updateTestRun(testRun.id, {
           status: TestRunStatus.QUEUED,
         })
-        
+
         fastify.log.info(`Test run ${testRun.id} enqueued successfully`)
       } catch (queueError: any) {
         fastify.log.error(`Failed to enqueue test run ${testRun.id}:`, queueError)
@@ -92,9 +92,9 @@ export async function testRoutes(fastify: FastifyInstance) {
           status: TestRunStatus.FAILED,
           error: `Failed to enqueue: ${queueError.message}`,
         })
-        return reply.code(500).send({ 
+        return reply.code(500).send({
           error: 'Failed to enqueue test run. Please ensure Redis is running and worker service is started.',
-          details: queueError.message 
+          details: queueError.message
         })
       }
 
@@ -113,7 +113,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { runId: string } }>('/:runId/status', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -130,7 +130,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { runId: string } }>('/:runId', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -152,7 +152,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { runId: string } }>('/:runId/artifacts', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -172,7 +172,7 @@ export async function testRoutes(fastify: FastifyInstance) {
     try {
       const { runId } = request.params
       const { type, url, path, size } = request.body
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -197,7 +197,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: { projectId?: string; limit?: number } }>('/', async (request: any, reply: any) => {
     try {
       const { projectId, limit } = request.query
-      
+
       const testRuns = await Database.listTestRuns(projectId, limit ? parseInt(limit.toString()) : 50)
 
       return reply.send({ testRuns })
@@ -211,7 +211,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { runId: string } }>('/:runId/cancel', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -232,12 +232,87 @@ export async function testRoutes(fastify: FastifyInstance) {
     }
   })
 
-  // Update test run (for worker updates)
-  fastify.patch<{ Params: { runId: string }; Body: Partial<TestRun> }>('/:runId', async (request: any, reply: any) => {
+  // Mark stale test as timed out (for cleaning up stuck tests)
+  fastify.post<{ Params: { runId: string }; Body: { reason?: string } }>('/:runId/timeout', async (request: any, reply: any) => {
+    try {
+      const { runId } = request.params
+      const { reason } = request.body || {}
+
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      // Only timeout tests that are in active states
+      const activeStates = [TestRunStatus.RUNNING, TestRunStatus.PENDING, TestRunStatus.QUEUED, TestRunStatus.DIAGNOSING]
+      if (!activeStates.includes(testRun.status)) {
+        return reply.code(400).send({ error: `Cannot timeout test in '${testRun.status}' state` })
+      }
+
+      await Database.updateTestRun(runId, {
+        status: TestRunStatus.FAILED,
+        error: reason || 'Test timed out: No progress detected for extended period',
+        completedAt: new Date().toISOString(),
+      })
+
+      fastify.log.warn(`Test run ${runId} marked as timed out: ${reason || 'no reason provided'}`)
+
+      return reply.send({ success: true, testRun: await Database.getTestRun(runId) })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to timeout test run' })
+    }
+  })
+
+  // Cleanup all stale tests (batch operation for stuck tests older than threshold)
+  fastify.post<{ Body: { timeoutMinutes?: number } }>('/cleanup-stale', async (request: any, reply: any) => {
+    try {
+      const { timeoutMinutes = 30 } = request.body || {}
+      const cutoffTime = new Date(Date.now() - timeoutMinutes * 60 * 1000)
+
+      // Find all tests in active states that haven't been updated recently
+      const activeStates = [TestRunStatus.RUNNING, TestRunStatus.PENDING, TestRunStatus.QUEUED, TestRunStatus.DIAGNOSING]
+
+      // Get all test runs (limited to last 100 for safety)
+      const allRuns = await Database.listTestRuns(undefined, 100)
+
+      const staleRuns = allRuns.filter((run: TestRun) => {
+        if (!activeStates.includes(run.status)) return false
+        const lastUpdate = new Date(run.updatedAt || run.createdAt)
+        return lastUpdate < cutoffTime
+      })
+
+      let cleaned = 0
+      for (const run of staleRuns) {
+        await Database.updateTestRun(run.id, {
+          status: TestRunStatus.FAILED,
+          error: `Test timed out: No progress for ${timeoutMinutes} minutes`,
+          completedAt: new Date().toISOString(),
+        })
+        cleaned++
+        fastify.log.warn(`Stale test ${run.id} cleaned up (created: ${run.createdAt})`)
+      }
+
+      return reply.send({
+        success: true,
+        cleaned,
+        message: `Cleaned up ${cleaned} stale test run(s) older than ${timeoutMinutes} minutes`,
+      })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to cleanup stale tests' })
+    }
+  })
+
+  // Update test run (generic update - used by worker and frontend)
+  // Allow optional auth to support both worker (no user) and frontend (user) updates
+  fastify.patch<{ Params: { runId: string }; Body: Partial<TestRun> }>('/:runId', {
+    preHandler: optionalAuth,
+  }, async (request: any, reply: any) => {
     try {
       const { runId } = request.params
       const updates = request.body
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -253,14 +328,14 @@ export async function testRoutes(fastify: FastifyInstance) {
   })
 
   // Save checkpoint (for worker to save steps incrementally)
-  fastify.post<{ 
+  fastify.post<{
     Params: { runId: string }
     Body: { stepNumber: number; steps: any[]; artifacts: string[] }
   }>('/:runId/checkpoint', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
       const { stepNumber, steps, artifacts } = request.body
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -283,7 +358,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { runId: string } }>('/:runId/pause', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -308,7 +383,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { runId: string } }>('/:runId/resume', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -327,7 +402,7 @@ export async function testRoutes(fastify: FastifyInstance) {
           profile: testRun.profile,
           options: testRun.options
         }, { allowDuplicate: true })
-        
+
         await Database.updateTestRun(runId, {
           status: TestRunStatus.QUEUED
         })
@@ -350,7 +425,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { runId: string } }>('/:runId/approve', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -367,7 +442,7 @@ export async function testRoutes(fastify: FastifyInstance) {
         profile: testRun.profile,
         options: testRun.options
       }, { allowDuplicate: true })
-      
+
       await Database.updateTestRun(runId, {
         status: TestRunStatus.QUEUED
       })
@@ -384,7 +459,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { runId: string } }>('/:runId/stream', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -400,7 +475,7 @@ export async function testRoutes(fastify: FastifyInstance) {
 
       // Return stream info (worker will update this via WebSocket)
       return reply.send({
-        streamUrl: process.env.FRAME_STREAM_BASE_URL 
+        streamUrl: process.env.FRAME_STREAM_BASE_URL
           ? `${process.env.FRAME_STREAM_BASE_URL}/stream/${runId}`
           : `http://localhost:8080/stream/${runId}`,
         livekitUrl: process.env.LIVEKIT_URL,
@@ -413,14 +488,14 @@ export async function testRoutes(fastify: FastifyInstance) {
   })
 
   // Override next AI step with manual action
-  fastify.post<{ 
+  fastify.post<{
     Params: { runId: string }
     Body: { action: { type: string; selector?: string; value?: string } }
   }>('/:runId/override-step', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
       const { action } = request.body
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -440,10 +515,10 @@ export async function testRoutes(fastify: FastifyInstance) {
         })
       }
 
-      return reply.send({ 
-        success: true, 
+      return reply.send({
+        success: true,
         message: 'Step override queued',
-        action 
+        action
       })
     } catch (error: any) {
       fastify.log.error(error)
@@ -452,14 +527,14 @@ export async function testRoutes(fastify: FastifyInstance) {
   })
 
   // Update test instructions mid-run
-  fastify.post<{ 
+  fastify.post<{
     Params: { runId: string }
     Body: { instructions: string }
   }>('/:runId/update-instructions', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
       const { instructions } = request.body
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -487,10 +562,10 @@ export async function testRoutes(fastify: FastifyInstance) {
         })
       }
 
-      return reply.send({ 
-        success: true, 
+      return reply.send({
+        success: true,
         message: 'Instructions updated',
-        instructions 
+        instructions
       })
     } catch (error: any) {
       fastify.log.error(error)
@@ -503,7 +578,7 @@ export async function testRoutes(fastify: FastifyInstance) {
     try {
       const { runId, stepNumber } = request.params
       const stepNum = parseInt(stepNumber, 10)
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -527,7 +602,7 @@ export async function testRoutes(fastify: FastifyInstance) {
 
   // Inject manual action (Human-in-the-Loop / God Mode)
   // Enhanced: Accepts full God Mode event schema for learning
-  fastify.post<{ 
+  fastify.post<{
     Params: { runId: string }
     Body: {
       action: 'click' | 'type' | 'scroll' | 'navigate'
@@ -540,7 +615,7 @@ export async function testRoutes(fastify: FastifyInstance) {
     try {
       const { runId } = request.params
       const { action, selector, value, description, godModeEvent } = request.body
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -588,7 +663,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { runId: string } }>('/:runId/manual-actions', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -608,7 +683,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   })
 
   // Heuristics API endpoints (God Mode Memory)
-  
+
   // Store heuristic (learned action)
   fastify.post<{
     Body: {
@@ -724,7 +799,7 @@ export async function testRoutes(fastify: FastifyInstance) {
       const { projectId, componentHash, anchors, threshold = 0.7 } = request.body
 
       const { supabase } = await import('../lib/supabase')
-      
+
       // Query heuristics for same project
       let query = supabase
         .from('interaction_knowledge_base')
@@ -813,7 +888,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { runId: string } }>('/:runId/stop', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -830,8 +905,8 @@ export async function testRoutes(fastify: FastifyInstance) {
         completedAt: new Date().toISOString(),
       })
 
-      return reply.send({ 
-        success: true, 
+      return reply.send({
+        success: true,
         testRun: updated,
         message: 'Test stopped. Partial report available.',
       })
@@ -847,7 +922,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest, reply: any) => {
     try {
       const { runId } = request.params as { runId: string }
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -863,8 +938,8 @@ export async function testRoutes(fastify: FastifyInstance) {
         reportUrl,
       })
 
-      return reply.send({ 
-        success: true, 
+      return reply.send({
+        success: true,
         testRun: updated,
         reportUrl,
         message: `Report generated with ${steps.length} steps`,
@@ -879,7 +954,7 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { runId: string } }>('/:runId/report-view', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })
@@ -889,10 +964,10 @@ export async function testRoutes(fastify: FastifyInstance) {
       const { config } = await import('../config/env')
       const apiBaseUrl = config.apiUrl || process.env.API_URL || `http://localhost:3001`
       const artifacts = await Database.getArtifacts(runId)
-      
+
       // Generate HTML report
       const reportHtml = generateReportHtml(runId, testRun, steps, apiBaseUrl, artifacts)
-      
+
       reply.type('text/html')
       return reply.send(reportHtml)
     } catch (error: any) {
@@ -937,7 +1012,7 @@ export async function testRoutes(fastify: FastifyInstance) {
           return reply.code(500).send({ error: 'Failed to generate download URL' })
         }
 
-        return reply.send({ 
+        return reply.send({
           downloadUrl: signedData.signedUrl,
           expiresIn: 3600,
           artifact: {
@@ -957,9 +1032,9 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { runId: string } }>('/:runId/download', async (request: any, reply: any) => {
     try {
       const { runId } = request.params
-      
+
       fastify.log.info(`Report download requested for run: ${runId}`)
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         fastify.log.warn(`Test run not found: ${runId}`)
@@ -971,7 +1046,7 @@ export async function testRoutes(fastify: FastifyInstance) {
 
       // Import archiver dynamically
       const archiver = (await import('archiver')).default
-      
+
       // Use global fetch (Node 18+) or fallback to node-fetch
       let fetchFn: any
       if (typeof globalThis.fetch !== 'undefined') {
@@ -1008,13 +1083,13 @@ export async function testRoutes(fastify: FastifyInstance) {
           }
         }
       })
-      
+
       // Handle response stream errors
       rawResponse.on('error', (err: any) => {
         fastify.log.error({ err }, 'Response stream error')
         archive.abort()
       })
-      
+
       archive.pipe(rawResponse)
 
       // Generate report JSON with insights
@@ -1051,10 +1126,10 @@ export async function testRoutes(fastify: FastifyInstance) {
           })
         }
         if (step.performance) {
-          performanceMetrics.push({ 
+          performanceMetrics.push({
             pageLoadTime: step.performance.loadTime || 0,
             firstContentfulPaint: step.performance.firstPaint,
-            step: step.stepNumber 
+            step: step.stepNumber
           })
         }
       })
@@ -1233,7 +1308,7 @@ export async function testRoutes(fastify: FastifyInstance) {
       // Download and add screenshots
       const screenshotSteps = steps.filter(s => s.screenshotUrl)
       fastify.log.info(`Downloading ${screenshotSteps.length} screenshots for run ${runId}`)
-      
+
       for (const step of screenshotSteps) {
         try {
           if (step.screenshotUrl) {
@@ -1293,7 +1368,7 @@ export async function testRoutes(fastify: FastifyInstance) {
       const archivePromise = new Promise<void>((resolve, reject) => {
         // Only set up handlers once
         let resolved = false
-        
+
         archive.on('end', () => {
           if (!resolved) {
             resolved = true
@@ -1301,7 +1376,7 @@ export async function testRoutes(fastify: FastifyInstance) {
             resolve()
           }
         })
-        
+
         archive.on('error', (err: any) => {
           if (!resolved) {
             resolved = true
@@ -1334,13 +1409,15 @@ export async function testRoutes(fastify: FastifyInstance) {
     }
   })
 
+
+
   // Delete test run
   fastify.delete<{ Params: { runId: string } }>('/:runId', {
     preHandler: authenticate,
   }, async (request: AuthenticatedRequest, reply: any) => {
     try {
       const { runId } = request.params as { runId: string }
-      
+
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
         return reply.code(404).send({ error: 'Test run not found' })

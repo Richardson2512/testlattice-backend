@@ -35,6 +35,7 @@ interface HealingCandidate {
   selector: string
   strategy: SelfHealingInfo['strategy']
   note: string
+  confidence: number
 }
 
 export class PlaywrightRunner {
@@ -82,7 +83,8 @@ export class PlaywrightRunner {
     // Start trace recording (Time-Travel Debugger feature)
     // RE-ENABLED: Tracing enabled with Wasabi storage support
     let tracingStarted = false
-    const enableTracing = process.env.ENABLE_TRACING === 'true' || config.tracing?.enabled === true
+    // Use environment variable directly - config may not be available in this scope
+    const enableTracing = process.env.ENABLE_TRACING === 'true'
     if (enableTracing) {
       try {
         await context.tracing.start({
@@ -370,7 +372,7 @@ export class PlaywrightRunner {
    * Execute action
    * Uses real Playwright API to execute actions
    */
-  async executeAction(sessionId: string, action: LLMAction): Promise<ActionExecutionResult | void> {
+  async executeAction(sessionId: string, action: LLMAction, options?: { timeout?: number, waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' }): Promise<ActionExecutionResult | void> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       throw new Error(`Session ${sessionId} not found`)
@@ -383,146 +385,56 @@ export class PlaywrightRunner {
     try {
       let healingMeta: SelfHealingInfo | null = null
       switch (action.action) {
+        // ... (click/type/scroll cases remain same)
+
         case 'click':
-          if (!action.selector) {
-            throw new Error('Selector required for click action')
-          }
-
-          // Check for and dismiss popups/cookie banners before clicking
-          await this.resolveBlockingOverlays(page)
-
+          if (!action.selector) throw new Error('Selector required for click action')
           console.log('Playwright: Clicking element:', action.selector)
-
           try {
             healingMeta = await this.tryClick(page, action)
           } catch (clickError: any) {
-            // If click fails, try dismissing popups again and retry once
-            const popupDismissed = await this.resolveBlockingOverlays(page)
-            if (popupDismissed) {
-              try {
-                await page.waitForTimeout(500)
-                healingMeta = await this.tryClick(page, action)
-              } catch (retryError: any) {
-                await this.logElementDebugInfo(page, action.selector)
-                const { formatErrorForStep } = await import('../utils/errorFormatter')
-                const formattedError = formatErrorForStep(retryError, { action: action.action, selector: action.selector })
-                throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
-              }
-            } else {
-              await this.logElementDebugInfo(page, action.selector)
-              const { formatErrorForStep } = await import('../utils/errorFormatter')
-              const formattedError = formatErrorForStep(clickError, { action: action.action, selector: action.selector })
-              throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
-            }
+            await this.logElementDebugInfo(page, action.selector)
+            const { formatErrorForStep } = await import('../utils/errorFormatter')
+            const formattedError = formatErrorForStep(clickError, { action: action.action, selector: action.selector })
+            throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
           }
           break
 
         case 'type':
-          if (!action.selector || !action.value) {
-            throw new Error('Selector and value required for type action')
-          }
-
-          // Check for and dismiss popups/cookie banners before typing
-          await this.resolveBlockingOverlays(page)
-
+          // ... (keep existing type logic)
+          if (!action.selector || !action.value) throw new Error('Selector and value required for type action')
           console.log('Playwright: Typing into element:', action.selector, 'value:', action.value)
-
           try {
-            // Use locator API for better selector support
             const locator = page.locator(action.selector)
             await locator.waitFor({ state: 'visible', timeout: 10000 })
-
-            // Show cursor at input field before typing
             try {
               const boundingBox = await locator.boundingBox()
               if (boundingBox) {
                 const centerX = boundingBox.x + boundingBox.width / 2
                 const centerY = boundingBox.y + boundingBox.height / 2
-
-                // Show cursor at element center
                 await page.evaluate(({ x, y }) => {
-                  if ((window as any).__playwrightShowCursor) {
-                    (window as any).__playwrightShowCursor(x, y)
-                  }
+                  if ((window as any).__playwrightShowCursor) (window as any).__playwrightShowCursor(x, y)
                 }, { x: centerX, y: centerY })
-
-                // Wait a bit to show cursor movement
                 await page.waitForTimeout(200)
               }
-            } catch (indicatorError) {
-              // If showing indicators fails, continue with typing anyway
-              console.warn('Failed to show type indicator:', indicatorError)
-            }
-
+            } catch (indicatorError) { console.warn('Failed to show type indicator:', indicatorError) }
             await locator.fill(action.value, { timeout: 10000 })
-
-            // Hide cursor after typing
             try {
               await page.evaluate(() => {
-                if ((window as any).__playwrightHideCursor) {
-                  (window as any).__playwrightHideCursor()
-                }
+                if ((window as any).__playwrightHideCursor) (window as any).__playwrightHideCursor()
               })
-            } catch (hideError) {
-              // Ignore hide errors
-            }
+            } catch (hideError) { }
           } catch (error: any) {
-            // If type fails, try dismissing popups again and retry once
-            const popupDismissed = await this.resolveBlockingOverlays(page)
-            if (popupDismissed) {
-              try {
-                await page.waitForTimeout(500)
-                const locator = page.locator(action.selector)
-                await locator.waitFor({ state: 'visible', timeout: 10000 })
-
-                // Show cursor at input field before typing (retry)
-                try {
-                  const boundingBox = await locator.boundingBox()
-                  if (boundingBox) {
-                    const centerX = boundingBox.x + boundingBox.width / 2
-                    const centerY = boundingBox.y + boundingBox.height / 2
-                    await page.evaluate(({ x, y }) => {
-                      if ((window as any).__playwrightShowCursor) {
-                        (window as any).__playwrightShowCursor(x, y)
-                      }
-                    }, { x: centerX, y: centerY })
-                    await page.waitForTimeout(200)
-                  }
-                } catch (indicatorError) {
-                  // Ignore indicator errors
-                }
-
-                await locator.fill(action.value, { timeout: 10000 })
-
-                // Hide cursor after typing
-                try {
-                  await page.evaluate(() => {
-                    if ((window as any).__playwrightHideCursor) {
-                      (window as any).__playwrightHideCursor()
-                    }
-                  })
-                } catch (hideError) {
-                  // Ignore hide errors
-                }
-              } catch (retryError: any) {
-                const { formatErrorForStep } = await import('../utils/errorFormatter')
-                const formattedError = formatErrorForStep(retryError, { action: action.action, selector: action.selector })
-                throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
-              }
-            } else {
-              const { formatErrorForStep } = await import('../utils/errorFormatter')
-              const formattedError = formatErrorForStep(error, { action: action.action, selector: action.selector })
-              throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
-            }
+            const { formatErrorForStep } = await import('../utils/errorFormatter')
+            const formattedError = formatErrorForStep(error, { action: action.action, selector: action.selector })
+            throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
           }
           break
 
         case 'scroll':
           console.log('Playwright: Scrolling')
-          await page.evaluate(() => {
-            window.scrollBy(0, window.innerHeight)
-          })
-          await page.waitForTimeout(500) // Wait for scroll to complete
+          await page.evaluate(() => { window.scrollBy(0, window.innerHeight) })
+          await page.waitForTimeout(500)
           break
 
         case 'navigate':
@@ -531,17 +443,18 @@ export class PlaywrightRunner {
           }
 
           // SECURITY: Validate URL to prevent SSRF attacks
-          // Block localhost, private IPs, and cloud metadata endpoints
           validateUrlOrThrow(action.value)
 
           console.log('Playwright: Navigating to:', action.value)
-          // Use 'load' instead of 'networkidle' - networkidle hangs on sites with 
-          // continuous network activity (analytics, tracking, websockets, etc.)
+          // Use provided options or defaults
+          const timeout = options?.timeout || 30000
+          const waitUntil = options?.waitUntil || 'load'
+
           try {
-            await page.goto(action.value, { waitUntil: 'load', timeout: 30000 })
+            await page.goto(action.value, { waitUntil, timeout })
           } catch (navError: any) {
-            // If 'load' times out, try with 'domcontentloaded' as fallback
-            if (navError.message?.includes('timeout')) {
+            // If 'load' times out, try with 'domcontentloaded' as fallback (unless overridden)
+            if (navError.message?.includes('timeout') && !options?.waitUntil) {
               console.warn('Playwright: Load timeout, retrying with domcontentloaded')
               await page.goto(action.value, { waitUntil: 'domcontentloaded', timeout: 15000 })
             } else {
@@ -550,8 +463,6 @@ export class PlaywrightRunner {
           }
 
           // Note: Cookie banner detection is handled in testProcessor after navigation
-          // Don't detect here to avoid duplicate detection
-          // Wait for page to stabilize
           await page.waitForTimeout(1000)
           break
 
@@ -863,20 +774,18 @@ export class PlaywrightRunner {
 
   /**
    * Check for and dismiss blocking overlays (popups, modals)
-   * Called proactively before each action to prevent popups from blocking tests
+   * 
+   * DEPRECATED: This method contained cookie bypass logic and has been removed.
+   * Cookie handling is now exclusively handled by CookieBannerHandler.
+   * Non-cookie popups are handled by NonCookiePopupHandler.
+   * 
+   * This method is kept for backward compatibility but always returns false.
    */
   async checkAndDismissOverlays(sessionId: string): Promise<boolean> {
-    const session = this.sessions.get(sessionId)
-    if (!session?.page) {
-      return false
-    }
-
-    try {
-      return await this.resolveBlockingOverlays(session.page)
-    } catch (error: any) {
-      console.warn(`Playwright: Error checking overlays: ${error.message}`)
-      return false
-    }
+    // Cookie handling bypass removed - always return false
+    // Cookie handling must go through CookieBannerHandler
+    // Non-cookie popups must go through NonCookiePopupHandler
+    return false
   }
 
   private async tryClick(page: Page, action: LLMAction): Promise<SelfHealingInfo | null> {
@@ -1039,18 +948,9 @@ export class PlaywrightRunner {
         // Ignore hide errors
       }
     } catch (error: any) {
-      if (!options.fromHealing && this.isPointerInterceptionError(error)) {
-        const resolved = await this.resolveBlockingOverlays(page)
-        if (resolved) {
-          console.log(`Playwright: Blocking overlay dismissed while clicking ${selector}, retrying click...`)
-          await locator.click({ timeout: 10000, force: false })
-        } else {
-          console.warn(`Playwright: Unable to resolve blocking overlay for ${selector}`)
-          throw error
-        }
-      } else {
-        throw error
-      }
+      // Cookie handling bypass removed - no automatic overlay dismissal
+      // If pointer interception error, it's likely a real element issue, not a popup
+      throw error
     }
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { })
     const afterUrl = page.url()
@@ -1081,523 +981,21 @@ export class PlaywrightRunner {
     )
   }
 
+  /**
+   * DEPRECATED: resolveBlockingOverlays removed
+   * 
+   * This method contained cookie bypass logic and has been completely removed.
+   * Cookie handling is now exclusively handled by CookieBannerHandler.
+   * Non-cookie popups are handled by NonCookiePopupHandler.
+   * 
+   * This stub exists only to prevent compilation errors from legacy call sites.
+   * All call sites should be updated to remove calls to this method.
+   */
   private async resolveBlockingOverlays(page: Page): Promise<boolean> {
-    let dismissed = false
-
-    // Step 1: Find cookie banner by looking for cookie-related text
-    // Then find the banner container by traversing up the DOM
-    try {
-      const cookieTextSelectors = [
-        ':has-text("THIS WEBSITE USES COOKIES")',
-        ':has-text("Accept All Cookies")',
-        ':has-text("This website uses cookies")',
-      ]
-
-      let cookieBannerContainer: any = null
-
-      for (const textSelector of cookieTextSelectors) {
-        try {
-          const textElement = page.locator(textSelector).first()
-          const count = await textElement.count()
-          if (count > 0) {
-            const isVisible = await textElement.isVisible().catch(() => false)
-            if (isVisible) {
-              // Find the banner container using XPath (most reliable)
-              // Look for parent elements that are likely the banner container
-              cookieBannerContainer = textElement.locator('xpath=ancestor::*[contains(@class, "cookie") or contains(@id, "cookie") or contains(@class, "consent") or contains(@id, "consent") or contains(@class, "banner") or contains(@style, "position: fixed") or contains(@style, "position:absolute") or contains(@style, "position: fixed") or contains(@style, "position:absolute")][1]').first()
-
-              // If XPath didn't work, try finding by evaluating the DOM
-              const containerCount = await cookieBannerContainer.count().catch(() => 0)
-              if (containerCount === 0) {
-                // Use evaluate to find the container and mark it
-                const marker = await textElement.evaluate((el) => {
-                  let current: any = el
-                  let bestContainer: any = null
-                  let maxScore = 0
-
-                  for (let i = 0; i < 15 && current && current !== document.body; i++) {
-                    const style = window.getComputedStyle(current)
-                    const rect = current.getBoundingClientRect()
-                    const classes = String(current.className || '').toLowerCase()
-                    const id = String(current.id || '').toLowerCase()
-
-                    let score = 0
-                    if (style.position === 'fixed' || style.position === 'absolute') score += 10
-                    if (classes.includes('cookie') || classes.includes('consent') || classes.includes('banner')) score += 20
-                    if (id.includes('cookie') || id.includes('consent')) score += 20
-                    if (rect.bottom > window.innerHeight * 0.7) score += 10
-                    if (rect.width > window.innerWidth * 0.3 && rect.height > 50) score += 10
-
-                    if (score > maxScore) {
-                      maxScore = score
-                      bestContainer = current
-                    }
-
-                    current = current.parentElement
-                  }
-
-                  if (bestContainer) {
-                    // Mark it with a data attribute
-                    const uniqueMarker = `cookie-banner-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-                    bestContainer.setAttribute('data-cookie-banner-marker', uniqueMarker)
-                    return uniqueMarker
-                  }
-                  return null
-                }).catch(() => null)
-
-                if (marker) {
-                  cookieBannerContainer = page.locator(`[data-cookie-banner-marker="${marker}"]`).first()
-                  const markerCount = await cookieBannerContainer.count().catch(() => 0)
-                  if (markerCount > 0) {
-                    console.log('Playwright: Found cookie banner container (evaluate method)')
-                  }
-                }
-              } else {
-                console.log('Playwright: Found cookie banner container (XPath method)')
-              }
-
-              if (cookieBannerContainer && (await cookieBannerContainer.count().catch(() => 0)) > 0) {
-                break
-              }
-            }
-          }
-        } catch {
-          continue
-        }
-      }
-
-      // Step 2: If we found the banner container, find ALL buttons within it and try clicking them
-      if (cookieBannerContainer && (await cookieBannerContainer.count().catch(() => 0)) > 0) {
-        const isVisible = await cookieBannerContainer.isVisible().catch(() => false)
-        if (isVisible) {
-          console.log('Playwright: Cookie banner visible, searching for buttons inside...')
-
-          // Get ALL clickable elements within the banner
-          const allClickableElements = cookieBannerContainer.locator('button, [role="button"], a, [onclick], [data-action], [data-dismiss]')
-          const elementCount = await allClickableElements.count().catch(() => 0)
-
-          console.log(`Playwright: Found ${elementCount} clickable elements in cookie banner`)
-
-          // Try each element
-          for (let i = 0; i < elementCount; i++) {
-            try {
-              const element = allClickableElements.nth(i)
-              const isElementVisible = await element.isVisible().catch(() => false)
-              if (!isElementVisible) continue
-
-              // Get element text and attributes
-              const elementText = await element.textContent().catch(() => '')
-              const elementTag = await element.evaluate((el: any) => el.tagName.toLowerCase()).catch(() => '')
-              const elementRole = await element.getAttribute('role').catch(() => '')
-              const elementOnClick = await element.getAttribute('onclick').catch(() => '')
-
-              const normalizedText = (elementText || '').trim().toLowerCase()
-
-              // Check if this looks like an accept/close button
-              const isAcceptButton =
-                normalizedText.includes('accept all cookies') ||
-                normalizedText.includes('accept all') ||
-                normalizedText.includes('accept cookies') ||
-                (normalizedText.includes('accept') && normalizedText.length < 30) ||
-                normalizedText.includes('agree') ||
-                normalizedText.includes('allow all') ||
-                normalizedText === 'ok' ||
-                normalizedText === 'got it' ||
-                normalizedText === 'continue' ||
-                normalizedText === '×' ||
-                normalizedText === '✕' ||
-                normalizedText === 'x' ||
-                elementOnClick?.toLowerCase().includes('accept') ||
-                elementOnClick?.toLowerCase().includes('close') ||
-                elementOnClick?.toLowerCase().includes('dismiss')
-
-              if (isAcceptButton) {
-                console.log(`Playwright: Found potential accept button: tag="${elementTag}", text="${elementText}", role="${elementRole}"`)
-
-                // Verify element is actionable
-                const isActionable = await element.evaluate((el: any) => {
-                  const style = window.getComputedStyle(el)
-                  return style.pointerEvents !== 'none' &&
-                    style.opacity !== '0' &&
-                    !el.disabled &&
-                    el.offsetWidth > 0 &&
-                    el.offsetHeight > 0
-                }).catch(() => true)
-
-                if (!isActionable) {
-                  console.log(`Playwright: Element is not actionable, skipping`)
-                  continue
-                }
-
-                // Scroll into view and wait
-                await element.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => { })
-                await page.waitForTimeout(500)
-
-                // Try clicking
-                try {
-                  console.log(`Playwright: Attempting to click: "${elementText}"`)
-                  await element.click({ timeout: 3000, force: false })
-                } catch (clickError: any) {
-                  console.log(`Playwright: Normal click failed, trying force: ${clickError.message}`)
-                  await element.click({ timeout: 3000, force: true })
-                }
-
-                // Wait for dismissal
-                await page.waitForTimeout(2000)
-
-                // Verify dismissal
-                const bannerStillVisible = await cookieBannerContainer.isVisible({ timeout: 1000 }).catch(() => true)
-                const cookieTextVisible = await page.locator(':has-text("THIS WEBSITE USES COOKIES")').count().catch(() => 0)
-
-                if (!bannerStillVisible || cookieTextVisible === 0) {
-                  console.log(`Playwright: ✅ Successfully dismissed cookie banner using: "${elementText}"`)
-                  return true
-                } else {
-                  console.log(`Playwright: ⚠️ Clicked but banner still visible, trying next element`)
-                }
-              }
-            } catch (error: any) {
-              console.log(`Playwright: Error processing element ${i}: ${error.message}`)
-              continue
-            }
-          }
-
-          console.log('Playwright: No working buttons found in banner container')
-        }
-      }
-
-      // Step 3: Fallback - try finding buttons at page level with cookie-related text
-      console.log('Playwright: Trying page-level button search...')
-      const pageLevelButtons = [
-        'button:has-text("Accept All Cookies")',
-        'button:has-text("Accept All")',
-        '[role="button"]:has-text("Accept All Cookies")',
-        'a:has-text("Accept All Cookies")',
-      ]
-
-      for (const buttonSelector of pageLevelButtons) {
-        try {
-          const button = page.locator(buttonSelector).first()
-          const count = await button.count()
-          if (count > 0) {
-            const isVisible = await button.isVisible().catch(() => false)
-            if (isVisible) {
-              console.log(`Playwright: Found page-level button: ${buttonSelector}`)
-              await button.scrollIntoViewIfNeeded().catch(() => { })
-              await page.waitForTimeout(500)
-
-              try {
-                await button.click({ timeout: 3000, force: false })
-              } catch {
-                await button.click({ timeout: 3000, force: true })
-              }
-
-              await page.waitForTimeout(2000)
-
-              const cookieTextVisible = await page.locator(':has-text("THIS WEBSITE USES COOKIES")').count().catch(() => 0)
-              if (cookieTextVisible === 0) {
-                console.log(`Playwright: ✅ Successfully dismissed cookie banner using page-level button`)
-                return true
-              }
-            }
-          }
-        } catch {
-          continue
-        }
-      }
-    } catch (error: any) {
-      console.warn('Playwright: Cookie banner detection failed:', error.message)
-    }
-
-    // Expanded overlay selectors including cookie banners
-    const overlaySelectors = [
-      // Standard modals
-      '[role="dialog"]',
-      '[aria-modal="true"]',
-      '[data-overlay]',
-      '.modal',
-      '.modal-backdrop',
-      '.dialog',
-      '.ReactModal__Overlay',
-      '.chakra-modal__overlay',
-      '.fixed.inset-0',
-      '.fixed[class*="inset-0"]',
-      // Cookie consent banners (most common patterns)
-      '[id*="cookie" i]',
-      '[class*="cookie" i]',
-      '[id*="consent" i]',
-      '[class*="consent" i]',
-      '[id*="gdpr" i]',
-      '[class*="gdpr" i]',
-      '[id*="privacy" i]',
-      '[class*="privacy-banner" i]',
-      '[class*="cookie-banner" i]',
-      '[class*="cookie-consent" i]',
-      '[class*="cookie-notice" i]',
-      '[class*="cookie-bar" i]',
-      '[class*="cookie-popup" i]',
-      '[data-cookie]',
-      '[data-consent]',
-      // Fixed position elements at bottom (common for cookie banners)
-      '[style*="position: fixed"][style*="bottom"]',
-      '[style*="position:fixed"][style*="bottom"]',
-      '[style*="position: fixed"][style*="z-index"]',
-      '[style*="position:fixed"][style*="z-index"]',
-      // Newsletter/popup banners
-      '[id*="newsletter" i]',
-      '[class*="newsletter" i]',
-      '[id*="popup" i]',
-      '[class*="popup" i]',
-      '[id*="overlay" i]',
-      '[class*="overlay" i]',
-      // Bottom sheets and slide-ins
-      '[class*="bottom-sheet" i]',
-      '[class*="slide-in" i]',
-      '[class*="drawer" i]',
-      // Notification banners
-      '[class*="notification" i]',
-      '[class*="toast" i]',
-      '[class*="alert" i]',
-      // Common fixed position patterns
-      '[class*="fixed"][class*="z-"]',
-    ]
-
-    // Expanded close button selectors including cookie-specific buttons
-    const closeButtonSelectors = [
-      // Standard close
-      'button:has-text("Close")',
-      'button:has-text("Dismiss")',
-      'button:has-text("Got it")',
-      'button:has-text("OK")',
-      // Cookie consent specific (prioritize exact matches)
-      'button:has-text("Accept All Cookies")',
-      'button:has-text("Accept All")',
-      'button:has-text("Accept Cookies")',
-      'button:has-text("Accept")',
-      'button:has-text("I Accept")',
-      'button:has-text("I Agree")',
-      'button:has-text("Agree")',
-      'button:has-text("Allow")',
-      'button:has-text("Allow All")',
-      'button:has-text("Allow Cookies")',
-      'button:has-text("Continue")',
-      'button:has-text("Proceed")',
-      'button:has-text("Save Preferences")',
-      'button:has-text("Save")',
-      'button:has-text("Confirm")',
-      // Decline/Reject options
-      'button:has-text("Reject All")',
-      'button:has-text("Reject")',
-      'button:has-text("Decline All")',
-      'button:has-text("Decline")',
-      // Also check for role="button" elements with cookie text
-      '[role="button"]:has-text("Accept All Cookies")',
-      '[role="button"]:has-text("Accept All")',
-      '[role="button"]:has-text("Reject All")',
-      // Check for anchor tags styled as buttons
-      'a:has-text("Accept All Cookies")',
-      'a:has-text("Accept All")',
-      'a:has-text("Reject All")',
-      // Close icons
-      'button[aria-label*="close" i]',
-      'button[aria-label*="dismiss" i]',
-      'button[aria-label*="accept" i]',
-      '[data-testid*="close" i]',
-      '[data-testid*="accept" i]',
-      '[data-testid*="dismiss" i]',
-      '.modal-close',
-      '.close',
-      '.close-button',
-      '[class*="close"][class*="button" i]',
-      // X buttons
-      'button:has-text("×")',
-      'button:has-text("✕")',
-      '[aria-label*="×" i]',
-      // Generic patterns
-      'button[type="button"]:has-text("×")',
-      '[role="button"][aria-label*="close" i]',
-    ]
-
-    // Check all overlay selectors
-    for (const selector of overlaySelectors) {
-      try {
-        const overlays = page.locator(selector)
-        const count = await overlays.count()
-
-        if (count === 0) continue
-
-        // Check each overlay instance
-        for (let i = 0; i < count; i++) {
-          const overlay = overlays.nth(i)
-
-          try {
-            // Check if visible
-            const isVisible = await overlay.isVisible().catch(() => false)
-            if (!isVisible) continue
-
-            // Check z-index to see if it's on top (blocking)
-            const zIndex = await overlay.evaluate((el) => {
-              const style = window.getComputedStyle(el)
-              return parseInt(style.zIndex) || 0
-            }).catch(() => 0)
-
-            // Check if it covers significant portion of viewport
-            const boundingBox = await overlay.boundingBox().catch(() => null)
-            if (!boundingBox) continue
-
-            const viewportSize = page.viewportSize()
-            if (!viewportSize) continue
-
-            const coverage = (boundingBox.width * boundingBox.height) / (viewportSize.width * viewportSize.height)
-
-            // Only dismiss if it's blocking (high z-index or covers >15% of screen)
-            // Cookie banners are often at bottom but still blocking
-            // Also check if element is at bottom of page (common for cookie banners)
-            const isAtBottom = boundingBox.y + boundingBox.height > viewportSize.height * 0.7
-            const isCookieRelated = selector.toLowerCase().includes('cookie') ||
-              selector.toLowerCase().includes('consent') ||
-              selector.toLowerCase().includes('gdpr') ||
-              selector.toLowerCase().includes('privacy')
-            const isBlocking = zIndex >= 1000 ||
-              coverage > 0.15 ||
-              isCookieRelated ||
-              (isAtBottom && (zIndex > 0 || coverage > 0.05)) // Lower threshold for bottom banners
-
-            if (!isBlocking) continue
-
-            console.log(`Playwright: Detected blocking overlay (${selector}, z-index: ${zIndex}, coverage: ${(coverage * 100).toFixed(1)}%, at bottom: ${isAtBottom}). Attempting to dismiss...`)
-
-            // Try close buttons first (prioritize cookie accept buttons for cookie-related overlays)
-            let buttonDismissed = false
-
-            // For cookie-related overlays, prioritize accept buttons
-            if (isCookieRelated) {
-              const cookieAcceptButtons = [
-                'button:has-text("Accept All Cookies")',
-                'button:has-text("Accept All")',
-                '[role="button"]:has-text("Accept All Cookies")',
-                '[role="button"]:has-text("Accept All")',
-                'a:has-text("Accept All Cookies")',
-                'a:has-text("Accept All")',
-                'button:has-text("Accept")',
-              ]
-
-              for (const acceptSelector of cookieAcceptButtons) {
-                try {
-                  const acceptButton = overlay.locator(acceptSelector).first()
-                  if ((await acceptButton.count()) > 0 && (await acceptButton.isVisible())) {
-                    await acceptButton.click({ timeout: 2000, force: true })
-                    await page.waitForTimeout(1000) // Wait longer for cookie banners to disappear
-
-                    // Verify it was dismissed
-                    const stillVisible = await overlay.isVisible().catch(() => false)
-                    if (!stillVisible) {
-                      console.log(`Playwright: Successfully dismissed cookie banner using: ${acceptSelector}`)
-                      dismissed = true
-                      buttonDismissed = true
-                      break
-                    }
-                  }
-                } catch (error) {
-                  continue
-                }
-              }
-            }
-
-            // If cookie-specific buttons didn't work, try all close buttons
-            if (!buttonDismissed) {
-              for (const closeSelector of closeButtonSelectors) {
-                try {
-                  const closeButton = overlay.locator(closeSelector).first()
-                  if ((await closeButton.count()) > 0 && (await closeButton.isVisible())) {
-                    await closeButton.click({ timeout: 2000, force: true })
-                    await page.waitForTimeout(800) // Wait longer for cookie banners to disappear
-
-                    // Verify it was dismissed
-                    const stillVisible = await overlay.isVisible().catch(() => false)
-                    if (!stillVisible) {
-                      console.log(`Playwright: Successfully dismissed overlay using button: ${closeSelector}`)
-                      dismissed = true
-                      buttonDismissed = true
-                      break
-                    }
-                  }
-                } catch (error) {
-                  // Continue to next button
-                  continue
-                }
-              }
-            }
-
-            // If close button didn't work, try clicking overlay itself (for cookie banners at bottom)
-            if (!buttonDismissed) {
-              try {
-                // For cookie banners, try clicking near the bottom-right corner where accept buttons often are
-                const box = await overlay.boundingBox()
-                if (box) {
-                  // Try clicking near bottom-right (where accept buttons often are)
-                  await overlay.click({
-                    position: {
-                      x: Math.max(box.width - 50, box.width * 0.8),
-                      y: Math.max(box.height - 30, box.height * 0.8)
-                    },
-                    timeout: 1000
-                  })
-                  await page.waitForTimeout(800)
-
-                  const stillVisible = await overlay.isVisible().catch(() => false)
-                  if (!stillVisible) {
-                    console.log(`Playwright: Successfully dismissed overlay by clicking it`)
-                    dismissed = true
-                    buttonDismissed = true
-                  }
-                }
-              } catch {
-                // If that fails, try top-left corner
-                try {
-                  await overlay.click({ position: { x: 5, y: 5 }, timeout: 1000 })
-                  await page.waitForTimeout(800)
-
-                  const stillVisible = await overlay.isVisible().catch(() => false)
-                  if (!stillVisible) {
-                    console.log(`Playwright: Successfully dismissed overlay by clicking corner`)
-                    dismissed = true
-                    buttonDismissed = true
-                  }
-                } catch {
-                  // ignore
-                }
-              }
-            }
-          } catch (error: any) {
-            console.warn(`Playwright: Error checking overlay ${selector}:`, error.message)
-            continue
-          }
-        }
-      } catch (error) {
-        // Continue to next selector
-        continue
-      }
-    }
-
-    // Last resort: Try Escape key
-    if (!dismissed) {
-      try {
-        await page.keyboard.press('Escape')
-        await page.waitForTimeout(800)
-
-        // Verify something was dismissed by checking if any overlays disappeared
-        const hasOverlays = await page.locator('[role="dialog"], [aria-modal="true"], .modal, [id*="cookie" i], [class*="cookie" i]').count()
-        if (hasOverlays === 0) {
-          dismissed = true
-          console.log(`Playwright: Dismissed overlay using Escape key`)
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    return dismissed
+    // Cookie handling bypass removed - always return false
+    // Cookie handling must go through CookieBannerHandler
+    // Non-cookie popups must go through NonCookiePopupHandler
+    return false
   }
 
   private async applyClickSelfHealing(page: Page, action: LLMAction): Promise<SelfHealingInfo | null> {
@@ -1618,6 +1016,7 @@ export class PlaywrightRunner {
           originalSelector,
           healedSelector: candidate.selector,
           note: candidate.note,
+          confidence: candidate.confidence,
         }
       } catch {
         continue
@@ -1651,6 +1050,7 @@ export class PlaywrightRunner {
         selector: xpath,
         strategy: 'fallback',
         note: `Converted :has-text("${text}") selector to XPath text match`,
+        confidence: 0.95,
       })
     }
     return fallbacks
@@ -1665,11 +1065,13 @@ export class PlaywrightRunner {
         selector: `xpath=//*[self::button or self::a or @role="button"][contains(normalize-space(.), "${escaped}")]`,
         strategy: 'text',
         note: `Matched by visible text "${text}"`,
+        confidence: 0.9,
       },
       {
         selector: `xpath=//*[contains(@aria-label, "${escaped}") or contains(@title, "${escaped}")]`,
         strategy: 'text',
         note: `Matched by aria-label/title containing "${text}"`,
+        confidence: 0.9,
       },
     ]
   }
@@ -1691,6 +1093,7 @@ export class PlaywrightRunner {
           selector: healed,
           strategy: 'attribute',
           note: `Used ID prefix "${stablePrefix}" to match dynamic IDs`,
+          confidence: 0.8,
         })
       }
     }
@@ -1705,6 +1108,7 @@ export class PlaywrightRunner {
           selector: `[${attrName}^="${trimmed}"]`,
           strategy: 'attribute',
           note: `Used ${attrName} prefix "${trimmed}" to bypass dynamic suffixes`,
+          confidence: 0.8,
         })
       }
     }
@@ -1728,6 +1132,7 @@ export class PlaywrightRunner {
       selector: stripped,
       strategy: 'position',
       note: 'Removed dynamic IDs and data attributes to rely on structural path',
+      confidence: 0.5,
     }]
   }
 

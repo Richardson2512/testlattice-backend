@@ -11,7 +11,9 @@ import {
   DOMHealth,
   SecurityIssue,
   SEOIssue,
-  ThirdPartyDependency
+  ThirdPartyDependency,
+  EvaluationStatus,
+  EvaluationResult
 } from './comprehensive'
 
 export interface ComprehensiveTestResults {
@@ -246,6 +248,12 @@ export interface VisionElement {
   maxLength?: number
   pattern?: string
   elementId?: string
+  // Vision validation fields
+  visionValidated?: boolean
+  visibleOnScreen?: boolean
+  interactable?: boolean
+  visibilityConfidence?: number
+  visibilityReason?: string
 }
 
 export interface AccessibilityNode {
@@ -266,6 +274,7 @@ export interface VisionContext {
     timestamp?: string
     pageUrl?: string
     pageTitle?: string
+    visionValidated?: boolean  // Flag indicating vision was used
   }
 }
 
@@ -336,6 +345,7 @@ export interface SelfHealingInfo {
   originalSelector?: string
   healedSelector: string
   note: string
+  confidence: number
 }
 
 export interface TestStep {
@@ -347,8 +357,9 @@ export interface TestStep {
   timestamp: string
   screenshotUrl?: string
   domSnapshot?: string
-  success: boolean
+  success?: boolean
   error?: string
+  browser?: 'chromium' | 'firefox' | 'webkit'  // Browser for this step (mandatory for parallel browser tests)
   // Comprehensive testing data
   consoleErrors?: Array<{ type: string; message: string; timestamp: string }>
   networkErrors?: Array<{ url: string; status: number; timestamp: string }>
@@ -396,6 +407,15 @@ export interface TestStep {
     errorScreenshotUrl?: string // Screenshot captured at error time (separate from step screenshot)
     [key: string]: any // Allow other metadata
   }
+  // Soft warnings (e.g. performance issues) that don't fail the step
+  warnings?: Array<{ type: string; message: string; severity: string }>
+  // Detailed report on self-healing actions
+  healingReport?: {
+    originalSelector: string
+    healedSelector: string
+    reason: string
+    confidence: number
+  }
 }
 
 export interface ActionExecutionResult {
@@ -418,5 +438,9 @@ export interface JobData {
   build: Build
   profile: TestProfile
   options?: TestOptions
+  // Parallel browser testing support
+  browserType?: 'chromium' | 'firefox' | 'webkit' // Specific browser for this job
+  parentRunId?: string // Original runId if this is a browser-specific job from a matrix
+  browserMatrix?: Array<'chromium' | 'firefox' | 'webkit'> // Full browser matrix (for reference)
 }
 

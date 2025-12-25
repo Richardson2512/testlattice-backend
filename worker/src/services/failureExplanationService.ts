@@ -4,6 +4,7 @@
 import { ModelClient } from './unifiedBrain/ModelClient'
 import { UnifiedBrainService } from './unifiedBrainService'
 import { TestStep, LLMAction } from '../types'
+import { buildBoundedPrompt, TOKEN_BUDGETS } from './unifiedBrain/tokenBudget'
 
 export interface FailureExplanation {
   why: string // Plain English: why the failure likely happened
@@ -49,11 +50,11 @@ export class FailureExplanationService {
         return `${idx + 1}. ${h.action.action} ${h.action.target || h.action.selector || ''}`
       }).join('\n')
 
-      const consoleErrorSummary = context.consoleErrors.slice(-3).map(e => 
+      const consoleErrorSummary = context.consoleErrors.slice(-3).map(e =>
         `${e.type}: ${e.message.substring(0, 100)}`
       ).join('\n') || 'No console errors'
 
-      const networkErrorSummary = context.networkErrors.slice(-3).map(e => 
+      const networkErrorSummary = context.networkErrors.slice(-3).map(e =>
         `${e.status} ${e.url.substring(0, 60)}`
       ).join('\n') || 'No network errors'
 
@@ -109,7 +110,7 @@ Return JSON:
       )
 
       const parsed = JSON.parse(result.content)
-      
+
       return {
         why: parsed.why || 'Unable to determine root cause',
         userExperience: parsed.userExperience || 'The action could not be completed',
@@ -118,7 +119,7 @@ Return JSON:
       }
     } catch (error: any) {
       console.warn(`[FailureExplanationService] AI explanation failed:`, error.message)
-      
+
       // Fallback: Generate basic explanation from error message
       return this.generateFallbackExplanation(context.errorMessage, context.failedAction)
     }
@@ -129,7 +130,7 @@ Return JSON:
    */
   private generateFallbackExplanation(errorMessage: string, action: LLMAction): FailureExplanation {
     const lowerError = errorMessage.toLowerCase()
-    
+
     if (lowerError.includes('not visible') || lowerError.includes('hidden')) {
       return {
         why: `The ${action.target || 'element'} you're trying to interact with is hidden or not displayed on the page.`,
@@ -138,7 +139,7 @@ Return JSON:
         confidence: 'high',
       }
     }
-    
+
     if (lowerError.includes('not found') || lowerError.includes('does not exist')) {
       return {
         why: `The ${action.target || 'element'} doesn't exist on the page anymore, or the selector is incorrect.`,
@@ -147,7 +148,7 @@ Return JSON:
         confidence: 'high',
       }
     }
-    
+
     if (lowerError.includes('timeout')) {
       return {
         why: 'The page or element took too long to respond.',
@@ -156,7 +157,7 @@ Return JSON:
         confidence: 'medium',
       }
     }
-    
+
     // Generic fallback
     return {
       why: `The action failed: ${errorMessage.substring(0, 100)}`,

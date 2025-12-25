@@ -8,7 +8,6 @@ const log = DEBUG ? console.log.bind(console) : () => { }
 const logWarn = DEBUG ? console.warn.bind(console) : () => { }
 
 export interface InteractionActionsDependencies {
-  resolveBlockingOverlays: (page: Page) => Promise<boolean>
   tryClick: (page: Page, action: LLMAction) => Promise<SelfHealingInfo | null>
   logElementDebugInfo: (page: Page, selector: string) => Promise<void>
 }
@@ -24,32 +23,19 @@ export class InteractionActions {
       throw new Error('Selector required for click action')
     }
 
-    // Check for and dismiss popups/cookie banners before clicking
-    await this.deps.resolveBlockingOverlays(page)
+    // Cookie handling bypass removed - cookie handling must go through CookieBannerHandler
+    // Non-cookie popups are handled by NonCookiePopupHandler
 
     log('Playwright: Clicking element:', action.selector)
 
     try {
       return await this.deps.tryClick(page, action)
     } catch (clickError: any) {
-      // If click fails, try dismissing popups again and retry once
-      const popupDismissed = await this.deps.resolveBlockingOverlays(page)
-      if (popupDismissed) {
-        try {
-          await page.waitForTimeout(500)
-          return await this.deps.tryClick(page, action)
-        } catch (retryError: any) {
-          await this.deps.logElementDebugInfo(page, action.selector)
-          const { formatErrorForStep } = await import('../../../utils/errorFormatter')
-          const formattedError = formatErrorForStep(retryError, { action: action.action, selector: action.selector })
-          throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
-        }
-      } else {
+      // Cookie handling bypass removed - no automatic popup dismissal
         await this.deps.logElementDebugInfo(page, action.selector)
         const { formatErrorForStep } = await import('../../../utils/errorFormatter')
         const formattedError = formatErrorForStep(clickError, { action: action.action, selector: action.selector })
         throw new Error(`Failed to click element ${action.selector}: ${formattedError}`)
-      }
     }
   }
 
@@ -61,8 +47,8 @@ export class InteractionActions {
       throw new Error('Selector and value required for type action')
     }
 
-    // Check for and dismiss popups/cookie banners before typing
-    await this.deps.resolveBlockingOverlays(page)
+    // Cookie handling bypass removed - cookie handling must go through CookieBannerHandler
+    // Non-cookie popups are handled by NonCookiePopupHandler
 
     log('Playwright: Typing into element:', action.selector, 'value:', action.value)
 
@@ -106,53 +92,10 @@ export class InteractionActions {
         // Ignore hide errors
       }
     } catch (error: any) {
-      // If type fails, try dismissing popups again and retry once
-      const popupDismissed = await this.deps.resolveBlockingOverlays(page)
-      if (popupDismissed) {
-        try {
-          await page.waitForTimeout(500)
-          const locator = page.locator(action.selector)
-          await locator.waitFor({ state: 'visible', timeout: 10000 })
-
-          // Show cursor at input field before typing (retry)
-          try {
-            const boundingBox = await locator.boundingBox()
-            if (boundingBox) {
-              const centerX = boundingBox.x + boundingBox.width / 2
-              const centerY = boundingBox.y + boundingBox.height / 2
-              await page.evaluate(({ x, y }: { x: number; y: number }) => {
-                if ((window as any).__playwrightShowCursor) {
-                  (window as any).__playwrightShowCursor(x, y)
-                }
-              }, { x: centerX, y: centerY })
-              await page.waitForTimeout(200)
-            }
-          } catch (indicatorError) {
-            // Ignore indicator errors
-          }
-
-          await locator.fill(action.value, { timeout: 10000 })
-
-          // Hide cursor after typing
-          try {
-            await page.evaluate(() => {
-              if ((window as any).__playwrightHideCursor) {
-                (window as any).__playwrightHideCursor()
-              }
-            })
-          } catch (hideError) {
-            // Ignore hide errors
-          }
-        } catch (retryError: any) {
-          const { formatErrorForStep } = await import('../../../utils/errorFormatter')
-          const formattedError = formatErrorForStep(retryError, { action: action.action, selector: action.selector })
-          throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
-        }
-      } else {
+      // Cookie handling bypass removed - no automatic popup dismissal
         const { formatErrorForStep } = await import('../../../utils/errorFormatter')
         const formattedError = formatErrorForStep(error, { action: action.action, selector: action.selector })
         throw new Error(`Failed to type into element ${action.selector}: ${formattedError}`)
-      }
     }
   }
 

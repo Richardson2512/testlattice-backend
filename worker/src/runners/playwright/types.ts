@@ -19,6 +19,7 @@ export interface HealingCandidate {
     selector: string
     strategy: SelfHealingInfo['strategy']
     note: string
+    confidence: number
 }
 
 export const VIEWPORT_PRESETS: Record<string, { width: number; height: number }> = {

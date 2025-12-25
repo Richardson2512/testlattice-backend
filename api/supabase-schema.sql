@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
   completed_at TIMESTAMPTZ,
   duration INTEGER, -- Duration in seconds
   error TEXT,
+  name TEXT, -- Custom name for the test run
   report_url TEXT,
   artifacts_url TEXT,
   trace_url TEXT, -- Fallback for trace URL if artifact save fails

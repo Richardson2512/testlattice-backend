@@ -32,7 +32,7 @@ Start-Sleep -Seconds 2
 
 # Start Frontend
 Write-Host "🎨 Starting Frontend (port 3000)..." -ForegroundColor Cyan
-$frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot\frontend'; Write-Host 'Frontend (Next.js)' -ForegroundColor Cyan; npm run dev" -PassThru
+$frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot/../testlattice-main'; Write-Host 'Frontend (Next.js)' -ForegroundColor Cyan; npm run dev" -PassThru
 Start-Sleep -Seconds 5
 
 # Open browser

@@ -1,12 +1,19 @@
 // Supabase Storage service for artifacts
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { TestArtifact } from '../types'
+import { WasabiStorageService } from './wasabiStorage'
 
 export class StorageService {
   private supabase: SupabaseClient
   private bucketName: string
+  private wasabiService: WasabiStorageService | null
 
-  constructor(supabaseUrl: string, storageKey: string, bucketName: string = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts') {
+  constructor(
+    supabaseUrl: string,
+    storageKey: string,
+    bucketName: string = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts',
+    wasabiService: WasabiStorageService | null = null
+  ) {
     if (!supabaseUrl) {
       throw new Error('Supabase URL is required for storage uploads. Set SUPABASE_URL in worker/.env')
     }
@@ -18,6 +25,7 @@ export class StorageService {
     }
 
     this.bucketName = bucketName
+    this.wasabiService = wasabiService
 
     this.supabase = createClient(supabaseUrl, storageKey, {
       auth: {
@@ -43,16 +51,23 @@ export class StorageService {
       orientation?: 'portrait' | 'landscape'
     }
   ): Promise<string> {
+    // Convert string to buffer if needed
+    const buffer = Buffer.isBuffer(screenshot)
+      ? screenshot
+      : Buffer.from(screenshot, 'base64')
+
+    if (this.wasabiService) {
+      return this.wasabiService.uploadScreenshot(runId, stepNumber, buffer, {
+        browser: metadata?.browser,
+        viewport: metadata?.viewport
+      })
+    }
+
     // Include browser and viewport in filename for browser matrix support
     const browserSuffix = metadata?.browser ? `-${metadata.browser}` : ''
     const viewportSuffix = metadata?.viewport ? `-${metadata.viewport.replace(/x/g, 'x')}` : ''
     const orientationSuffix = metadata?.orientation ? `-${metadata.orientation}` : ''
     const filename = `screenshots/${runId}/step-${stepNumber}${browserSuffix}${viewportSuffix}${orientationSuffix}-${Date.now()}.png`
-
-    // Convert string to buffer if needed
-    const buffer = Buffer.isBuffer(screenshot)
-      ? screenshot
-      : Buffer.from(screenshot, 'base64')
 
     const { data, error } = await this.supabase.storage
       .from(this.bucketName)
@@ -102,6 +117,10 @@ export class StorageService {
     runId: string,
     video: Buffer
   ): Promise<string> {
+    if (this.wasabiService) {
+      return this.wasabiService.uploadVideoBuffer(runId, video)
+    }
+
     // Playwright videos are typically .webm format
     const filename = `videos/${runId}/test-run-${Date.now()}.webm`
 
@@ -133,6 +152,10 @@ export class StorageService {
     trace: Buffer,
     browserType?: string
   ): Promise<string> {
+    if (this.wasabiService) {
+      return this.wasabiService.uploadTraceBuffer(runId, trace, browserType)
+    }
+
     const browserSuffix = browserType ? `-${browserType}` : ''
     const filename = `traces/${runId}/trace${browserSuffix}-${Date.now()}.zip`
 
@@ -270,6 +293,10 @@ export class StorageService {
     stepNumber: number,
     domContent: string
   ): Promise<string> {
+    if (this.wasabiService) {
+      return this.wasabiService.uploadDOMSnapshot(runId, stepNumber, domContent)
+    }
+
     const filename = `dom-snapshots/${runId}/step-${stepNumber}-${Date.now()}.html`
     const buffer = Buffer.from(domContent, 'utf-8')
 

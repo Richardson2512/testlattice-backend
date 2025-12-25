@@ -24,25 +24,130 @@ export class PageAnalyzer {
     }
 
     /**
-     * Analyze DOM snapshot and build a lightweight interaction context
+     * Analyze DOM snapshot and validate with vision (screenshot)
+     * Enhanced: Uses GPT-4o vision to validate which elements are actually visible
      */
-    async analyzeScreenshot(_screenshotBase64: string, domSnapshot: string, goal: string): Promise<VisionContext> {
+    async analyzeScreenshot(screenshotBase64: string, domSnapshot: string, goal: string): Promise<VisionContext> {
         try {
             const MAX_INTERACTIVE_ELEMENTS = Math.max(parseInt(process.env.DOM_SUMMARY_LIMIT || '200', 10), 20)
+            const ENABLE_VISION_VALIDATION = process.env.ENABLE_VISION_VALIDATION !== 'false'
 
+            // Step 1: Parse DOM elements
             const { elements, hiddenCount } = this.domParser.extractElements(domSnapshot)
             const limitedElements = elements.slice(0, MAX_INTERACTIVE_ELEMENTS)
             const accessibility = this.domParser.buildAccessibilitySummary(limitedElements)
 
+            // Step 2: Vision Validation (if enabled and screenshot provided)
+            let validatedElements = limitedElements
+            let visionValidated = false
+
+            if (ENABLE_VISION_VALIDATION && screenshotBase64 && screenshotBase64.length > 100) {
+                try {
+                    console.log(`[PageAnalyzer] Vision validation: Sending screenshot + ${limitedElements.length} DOM elements to GPT-4o`)
+
+                    // Build element summary for vision prompt (limit to top 30 for token efficiency)
+                    const elementSummary = limitedElements.slice(0, 30)
+                        .map((e, idx) => {
+                            const label = e.text || e.ariaLabel || e.name || 'unnamed'
+                            return `${idx + 1}. ${e.type}: "${label.substring(0, 50)}" - selector: "${e.selector}"`
+                        })
+                        .join('\n')
+
+                    const visionPrompt = `Analyze this screenshot and validate which of these DOM elements are ACTUALLY VISIBLE and INTERACTABLE on screen.
+
+Goal: ${goal}
+
+DOM Elements found:
+${elementSummary}
+
+Instructions:
+1. Look at the screenshot carefully
+2. For each element, determine if it's visible on screen (not hidden, not behind overlays)
+3. Identify which elements are clickable/interactable
+4. Flag any elements that exist in DOM but are NOT visible (hidden, covered, off-screen)
+
+Return JSON:
+{
+  "visibleElements": [
+    {"index": 1, "visible": true, "interactable": true, "confidence": 0.95},
+    {"index": 2, "visible": false, "interactable": false, "reason": "Behind modal overlay", "confidence": 0.9}
+  ],
+  "pageState": {
+    "hasOverlay": true/false,
+    "hasModal": true/false,
+    "loadingComplete": true/false
+  },
+  "recommendedAction": "Description of what's actually clickable on screen"
+}`
+
+                    const systemPrompt = `You are an expert UI analyst. Analyze screenshots to validate which DOM elements are actually visible and interactable. Be precise - elements can exist in DOM but be hidden, behind overlays, or off-screen. Return valid JSON.`
+
+                    const visionResult = await this.modelClient.callWithVision(
+                        screenshotBase64,
+                        visionPrompt,
+                        systemPrompt
+                    )
+
+                    // Parse vision response
+                    const visionData = JSON.parse(visionResult.content)
+
+                    if (visionData.visibleElements && Array.isArray(visionData.visibleElements)) {
+                        // Create visibility map
+                        const visibilityMap = new Map<number, { visible: boolean; interactable: boolean; confidence: number; reason?: string }>()
+                        visionData.visibleElements.forEach((ve: any) => {
+                            visibilityMap.set(ve.index, {
+                                visible: ve.visible ?? true,
+                                interactable: ve.interactable ?? true,
+                                confidence: ve.confidence ?? 0.8,
+                                reason: ve.reason
+                            })
+                        })
+
+                        // Enhance elements with visibility data
+                        validatedElements = limitedElements.map((element, idx) => {
+                            const visInfo = visibilityMap.get(idx + 1)
+                            if (visInfo) {
+                                return {
+                                    ...element,
+                                    visionValidated: true,
+                                    visibleOnScreen: visInfo.visible,
+                                    interactable: visInfo.interactable,
+                                    visibilityConfidence: visInfo.confidence,
+                                    visibilityReason: visInfo.reason,
+                                }
+                            }
+                            return element
+                        })
+
+                        // Filter to only visible elements (but keep all if vision failed for most)
+                        const visibleCount = validatedElements.filter((e: any) => e.visibleOnScreen !== false).length
+                        if (visibleCount > 0) {
+                            validatedElements = validatedElements.filter((e: any) => e.visibleOnScreen !== false)
+                        }
+
+                        visionValidated = true
+                        console.log(`[PageAnalyzer] Vision validated: ${visibleCount}/${limitedElements.length} elements visible on screen`)
+
+                        if (visionData.pageState) {
+                            console.log(`[PageAnalyzer] Page state: overlay=${visionData.pageState.hasOverlay}, modal=${visionData.pageState.hasModal}, loaded=${visionData.pageState.loadingComplete}`)
+                        }
+                    }
+                } catch (visionError: any) {
+                    console.warn(`[PageAnalyzer] Vision validation failed, using DOM-only:`, visionError.message)
+                    // Continue with DOM-only elements (graceful degradation)
+                }
+            }
+
             return {
-                elements: limitedElements,
+                elements: validatedElements,
                 accessibility,
                 metadata: {
                     totalElements: elements.length,
-                    interactiveElements: limitedElements.length,
+                    interactiveElements: validatedElements.length,
                     hiddenElements: hiddenCount,
                     truncated: elements.length > limitedElements.length,
                     timestamp: new Date().toISOString(),
+                    visionValidated, // Flag indicating vision was used
                 },
             }
         } catch (error: any) {

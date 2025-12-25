@@ -1,14 +1,40 @@
 // AI-Guided Cookie Banner Handler
-// Implements deterministic cookie banner dismissal with hard safety guarantees
+// SEALED STATE MACHINE - Authoritative, isolated cookie consent handling
+// 
+// CORE PRINCIPLE: Cookie consent handling is a SPECIAL, ISOLATED, AUTHORITATIVE FLOW.
+// Once cookie handling begins, it must fully resolve BEFORE any other action logic can run.
+//
+// State Machine: DETECT -> CLICK -> WAIT -> VERIFY (DOM) -> VERIFY (Vision if ambiguous) -> RETRY LIMITS
+//
+// NON-NEGOTIABLE INVARIANTS:
+// - Runs at most ONCE per test run
+// - No IRL, self-healing, or fallback during execution
+// - Post-click verification is MANDATORY
+// - All steps are logged for user visibility
 
 import { Page } from 'playwright'
 import { UnifiedBrainService } from './unifiedBrainService'
 import { TOKEN_BUDGETS, buildBoundedPrompt, pruneDOM } from './unifiedBrain/tokenBudget'
 import { VisionContext } from '../types'
 import { ModelClient } from './unifiedBrain/ModelClient'
+import axios from 'axios'
+import { ActionContext } from '../types/actionContext'
+import { getExecutionLogEmitter, ExecutionLogEmitter } from './executionLogEmitter'
+import { assertCookieHandlingAllowed, setCookieStatus, resetCookieStatus } from './cookieStatusTracker'
 
 export type CookieBannerStrategy = 'accept_all' | 'reject_all' | 'preferences_flow'
-export type CookieBannerOutcome = 'DISMISSED' | 'BLOCKED'
+
+/**
+ * CookieResolutionResult - Sealed return type from cookie handling
+ * 
+ * Once handleCookieConsent() returns, cookie handling MUST NEVER be re-entered.
+ * No other code is allowed to detect cookies, click cookie buttons, or retry cookie actions.
+ */
+export type CookieResolutionResult =
+  | { outcome: 'RESOLVED'; strategy: CookieBannerStrategy; selectorsAttempted: string[]; stepsExecuted: number }
+  | { outcome: 'RESOLVED_WITH_DELAY'; strategy: CookieBannerStrategy; selectorsAttempted: string[]; stepsExecuted: number; reason: string }
+  | { outcome: 'BLOCKED'; strategy?: CookieBannerStrategy; selectorsAttempted: string[]; stepsExecuted: number; reason: string }
+  | { outcome: 'NOT_PRESENT'; stepsExecuted: 0 }
 
 export interface CookieBannerPlan {
   isCookieBanner: boolean
@@ -20,8 +46,10 @@ export interface CookieBannerPlan {
   confidence: number
 }
 
+// Legacy type for backward compatibility (deprecated)
+export type CookieBannerOutcome = 'DISMISSED' | 'BLOCKED'
 export interface CookieBannerResult {
-  outcome: CookieBannerOutcome
+  outcome: CookieBannerOutcome | 'RESOLVED_WITH_DELAY'
   strategy?: CookieBannerStrategy
   selectorsAttempted: string[]
   reason?: string
@@ -37,10 +65,26 @@ export interface CookieBannerResult {
  * - Hard exit conditions prevent infinite loops
  * - Global selector tracking prevents retries
  */
+/**
+ * CookieBannerHandler - SEALED STATE MACHINE
+ * 
+ * This class implements the authoritative cookie consent handling flow.
+ * It is the ONLY code allowed to detect, click, or verify cookie banners.
+ * 
+ * INVARIANTS:
+ * - Runs at most ONCE per test run (enforced by pagesProcessed)
+ * - No IRL, self-healing, or fallback during execution
+ * - Post-click verification is MANDATORY
+ * - All steps are logged via ExecutionLogEmitter
+ */
 export class CookieBannerHandler {
   private modelClient: ModelClient
   private attemptedSelectors: Set<string> = new Set()
   private pagesProcessed: Set<string> = new Set()
+  private visualConfirmationsUsed: number = 0 // Track visual confirmations per execution
+  private readonly maxAttempts: number = 2 // Hard limit: max 2 cookie attempts
+  private readonly maxVisualConfirmations: number = 1 // Hard limit: max 1 visual confirmation per click
+  private logEmitter?: ExecutionLogEmitter
 
   constructor(unifiedBrain: UnifiedBrainService) {
     // Access modelClient from UnifiedBrainService (private property access via type assertion)
@@ -52,51 +96,315 @@ export class CookieBannerHandler {
   }
 
   /**
-   * Handle cookie banner on a page (ONE-TIME AI classification + deterministic execution)
+   * handleCookieConsent - SEALED STATE MACHINE
+   * 
+   * This is the ONLY function allowed to handle cookie consent.
+   * Once it returns, cookie handling MUST NEVER be re-entered during the same test run.
+   * 
+   * Returns: CookieResolutionResult (sealed type)
+   * - RESOLVED: Banner successfully dismissed
+   * - RESOLVED_WITH_DELAY: Banner persisted but test continues
+   * - BLOCKED: Banner could not be dismissed
+   * - NOT_PRESENT: No cookie banner detected
+   * 
+   * State Machine: DETECT -> CLICK -> WAIT -> VERIFY (DOM) -> VERIFY (Vision if ambiguous) -> RETRY LIMITS
    */
-  async handleCookieBanner(
+  async handleCookieConsent(
     page: Page,
     context: VisionContext,
-    currentUrl: string
-  ): Promise<CookieBannerResult> {
-    // Safety: Never process the same page twice
+    currentUrl: string,
+    runId: string
+  ): Promise<CookieResolutionResult> {
+    // Initialize execution log emitter
+    this.logEmitter = getExecutionLogEmitter(runId, 1)
+
+    // INVARIANT CHECK: Ensure cookie handling is allowed
+    assertCookieHandlingAllowed(runId, 'CookieBannerHandler.handleCookieConsent')
+
+    // Set status to IN_PROGRESS
+    setCookieStatus(runId, 'IN_PROGRESS')
+
+    // INVARIANT: Never process the same page twice
     if (this.pagesProcessed.has(currentUrl)) {
+      this.logEmitter.log('Cookie banner already processed for this page', { url: currentUrl })
+      setCookieStatus(runId, 'COMPLETED')
       return {
         outcome: 'BLOCKED',
-        reason: 'Cookie banner already processed for this page',
         selectorsAttempted: [],
         stepsExecuted: 0,
+        reason: 'Cookie banner already processed for this page',
       }
     }
 
     // Mark page as processed immediately to prevent re-entry
     this.pagesProcessed.add(currentUrl)
+    this.visualConfirmationsUsed = 0 // Reset visual confirmation counter
 
     try {
-      // Step 1: AI Classification (ONE-TIME)
+      // STATE 0: HEURISTIC FAST PATH
+      // Attempt to resolve common cookie banners without AI (faster, cheaper, more reliable)
+      this.logEmitter.log('Attempting heuristic cookie resolution')
+      const heuristicResult = await this.heuristicResolve(page, currentUrl)
+      if (heuristicResult && heuristicResult.outcome === 'RESOLVED') {
+        this.logEmitter.log('Heuristic resolution successful', { strategy: heuristicResult.strategy })
+        setCookieStatus(runId, 'COMPLETED')
+        return heuristicResult
+      }
+
+      // STATE 1: DETECT (AI Fallback)
+      this.logEmitter.log('Detected cookie consent banner (AI Analysis)', { url: currentUrl })
       const plan = await this.classifyCookieBanner(context, currentUrl)
 
       if (!plan.isCookieBanner) {
+        this.logEmitter.log('No cookie banner detected')
+        setCookieStatus(runId, 'COMPLETED')
         return {
-          outcome: 'BLOCKED',
-          reason: 'No cookie banner detected',
-          selectorsAttempted: [],
+          outcome: 'NOT_PRESENT',
           stepsExecuted: 0,
         }
       }
 
-      // Step 2: Deterministic Execution
-      return await this.executePlan(page, plan, currentUrl)
+      // STATE 2-6: CLICK -> WAIT -> VERIFY -> RETRY LIMITS
+      const result = await this.executePlan(page, plan, currentUrl)
+
+      // Set status to COMPLETED after handling
+      setCookieStatus(runId, 'COMPLETED')
+
+      return result
     } catch (error: any) {
-      console.warn(`[CookieBannerHandler] Error handling cookie banner:`, error.message)
+      this.logEmitter.log('Error handling cookie banner', { error: error.message })
+      // Set status to COMPLETED even on error - cookie handling is done
+      setCookieStatus(runId, 'COMPLETED')
       return {
         outcome: 'BLOCKED',
-        reason: `Error: ${error.message}`,
         selectorsAttempted: Array.from(this.attemptedSelectors),
         stepsExecuted: 0,
+        reason: `Error: ${error.message}`,
       }
     }
   }
+
+  /**
+   * STEP 1: Detect site platform (WordPress, Shopify, Webflow, Custom)
+   */
+  private async detectPlatform(page: Page): Promise<'wordpress' | 'shopify' | 'webflow' | 'custom'> {
+    try {
+      const platform = await page.evaluate(() => {
+        const html = document.documentElement.outerHTML.toLowerCase()
+        const meta = document.querySelector('meta[name="generator"]')?.getAttribute('content')?.toLowerCase() || ''
+
+        // WordPress detection
+        if (
+          html.includes('wp-content') ||
+          html.includes('wp-includes') ||
+          meta.includes('wordpress') ||
+          document.querySelector('link[href*="wp-content"]') ||
+          document.querySelector('script[src*="wp-includes"]')
+        ) {
+          return 'wordpress'
+        }
+
+        // Shopify detection
+        if (
+          html.includes('shopify') ||
+          html.includes('cdn.shopify.com') ||
+          meta.includes('shopify') ||
+          (window as any).Shopify
+        ) {
+          return 'shopify'
+        }
+
+        // Webflow detection
+        if (
+          html.includes('webflow') ||
+          html.includes('assets.website-files.com') ||
+          meta.includes('webflow') ||
+          document.querySelector('html[data-wf-site]')
+        ) {
+          return 'webflow'
+        }
+
+        return 'custom'
+      })
+
+      this.logEmitter?.log(`Detected platform: ${platform}`)
+      return platform
+    } catch (error) {
+      console.warn('[CookieBannerHandler] Platform detection failed, defaulting to custom')
+      return 'custom'
+    }
+  }
+
+  /**
+   * STEP 2: Get platform-specific cookie selectors
+   */
+  private getPlatformSelectors(platform: 'wordpress' | 'shopify' | 'webflow' | 'custom'): string[] {
+    const universalSelectors = [
+      // OneTrust (most common)
+      '#onetrust-accept-btn-handler',
+      '#onetrust-pc-btn-handler',
+      // TrustArc
+      '#trustarc-agree-btn',
+      // Cookiebot
+      '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+      // Generic patterns
+      'button[id*="cookie"][id*="accept"]',
+      'button[class*="cookie"][class*="accept"]',
+      'button:has-text("Accept All Cookies")',
+      'button:has-text("Accept All")',
+      'button:has-text("Allow All")',
+      'button:has-text("Agree")',
+      'button:has-text("I Accept")',
+      '[aria-label="Accept cookies"]',
+    ]
+
+    const platformSelectors: Record<string, string[]> = {
+      wordpress: [
+        // CookieYes (very popular WP plugin)
+        '#cky-accept-btn',
+        '.cky-btn-accept',
+        '.cky-consent-bar button.cky-btn-accept',
+        // GDPR Cookie Consent
+        '#cookie_action_close_header',
+        '.cli-plugin-button.cli_action_button',
+        '.cli-bar button[data-cli_action="accept"]',
+        // Complianz
+        '.cmplz-accept',
+        '.cmplz-btn.cmplz-accept',
+        '#cmplz-accept-btn',
+        // Borlabs Cookie
+        '.BorlabsCookie ._brlbs-btn-accept-all',
+        'a[data-cookie-accept-all]',
+        // Cookie Notice
+        '#cn-accept-cookie',
+        '.cn-button[data-cookie-action="accept"]',
+        // GDPR Cookie Compliance
+        '#moove_gdpr_cookie_accept',
+        '.moove_gdpr_cookie_modal button.mgbutton',
+      ],
+      shopify: [
+        // Shopify Cookie Banner
+        '.cc-dismiss',
+        '.cc-allow',
+        'button.cc-btn.cc-allow',
+        // Pandectes GDPR
+        '.pandectes-accept-all',
+        '#pandectes-accept',
+        // Cookie Bar
+        '#cookiebar-accept',
+        '.cookie-banner-accept',
+        // Enzuzo
+        '.ez-accept-all',
+        '#ez-cookie-banner button.ez-accept',
+      ],
+      webflow: [
+        // Finsweet Cookie Consent
+        '.fs-cc-banner_button[data-fs-cc-button="allow"]',
+        '[fs-cc="allow"]',
+        '.fs-cc-allow',
+        // Iubenda
+        '.iubenda-cs-accept-btn',
+        '#iubenda-cs-banner button.iubenda-cs-accept-btn',
+        // Termly
+        '#termly-consent-banner button.t-acceptAllButton',
+        '.termly-styles-acceptAll',
+      ],
+      custom: [],
+    }
+
+    // Combine platform-specific + universal selectors
+    return [...(platformSelectors[platform] || []), ...universalSelectors]
+  }
+
+  /**
+   * Heuristic Resolution: Platform-aware cookie banner handling
+   * Flow: Detect Platform → Select Selectors → Click → Screenshot Verify → Retry/Proceed
+   */
+  private async heuristicResolve(page: Page, currentUrl: string): Promise<CookieResolutionResult | null> {
+    try {
+      // STEP 1: Detect platform
+      const platform = await this.detectPlatform(page)
+
+      // STEP 2: Get platform-specific selectors
+      const selectors = this.getPlatformSelectors(platform)
+      this.logEmitter?.log(`Using ${selectors.length} selectors for ${platform} platform`)
+
+      // STEP 3: Try each selector
+      for (const selector of selectors) {
+        if (this.attemptedSelectors.has(selector)) continue
+
+        const element = page.locator(selector).first()
+        const isVisible = await element.isVisible({ timeout: 200 }).catch(() => false)
+
+        if (isVisible) {
+          const isEnabled = await element.isEnabled().catch(() => false)
+          if (!isEnabled) continue
+
+          this.logEmitter?.log(`Found cookie button: ${selector} (${platform})`)
+
+          // Click the button
+          await element.click({ timeout: 1000, force: false }).catch(() => {
+            return element.click({ force: true })
+          })
+
+          this.attemptedSelectors.add(selector)
+
+          // STEP 4: Wait and take verification screenshot
+          await page.waitForTimeout(500)
+
+          // Take screenshot for verification
+          const screenshot = await page.screenshot({ type: 'png', fullPage: false }).catch(() => null)
+          if (screenshot) {
+            this.logEmitter?.log('Verification screenshot captured')
+          }
+
+          // Check if button is still visible (DOM verification)
+          const stillVisible = await element.isVisible({ timeout: 200 }).catch(() => false)
+
+          if (!stillVisible) {
+            // SUCCESS: Banner dismissed
+            this.logEmitter?.log(`Cookie banner dismissed successfully (${platform})`)
+            return {
+              outcome: 'RESOLVED',
+              strategy: 'accept_all',
+              selectorsAttempted: [selector],
+              stepsExecuted: 1
+            }
+          } else {
+            // FAILED: Try visual verification
+            this.logEmitter?.log('Button still visible, attempting visual verification')
+            const bannerStillShowing = await this.verifyDismissalVision(page)
+
+            if (!bannerStillShowing) {
+              this.logEmitter?.log(`Cookie banner dismissed (visual confirmed, ${platform})`)
+              return {
+                outcome: 'RESOLVED',
+                strategy: 'accept_all',
+                selectorsAttempted: [selector],
+                stepsExecuted: 1
+              }
+            }
+            // Continue to next selector
+            this.logEmitter?.log('Visual verification: banner still visible, trying next selector')
+          }
+        }
+      }
+
+      // No selector worked
+      this.logEmitter?.log(`No heuristic selector worked for ${platform} platform`)
+      return null
+    } catch (error) {
+      console.warn('Heuristic cookie resolution failed:', error)
+      return null
+    }
+  }
+
+  /**
+   * DEPRECATED: This method has been removed as part of architectural cleanup.
+   * 
+   * All cookie handling must go through handleCookieConsent().
+   * This method was a legacy bypass path that has been eliminated.
+   */
 
   /**
    * AI Classification: Called exactly once per page
@@ -160,7 +468,7 @@ IMPORTANT:
       )
 
       const parsed = JSON.parse(response.content)
-      
+
       // Validate response
       if (typeof parsed.isCookieBanner !== 'boolean') {
         return { isCookieBanner: false, strategy: 'accept_all', primarySelectors: [], fallbackSelectors: [], maxSteps: 1, confidence: 0 }
@@ -187,21 +495,26 @@ IMPORTANT:
   }
 
   /**
-   * Deterministic Execution: Execute AI plan with strict validation
+   * Deterministic Execution: Execute AI plan with verification-based state machine
+   * State Machine: CLICK -> WAIT (randomized) -> VERIFY (DOM first) -> VERIFY (Vision if ambiguous) -> RETRY LIMITS
+   * 
+   * INVARIANT: This method runs in COOKIE_CONSENT context - no IRL, self-healing, or fallback allowed
    */
   private async executePlan(
     page: Page,
     plan: CookieBannerPlan,
     currentUrl: string
-  ): Promise<CookieBannerResult> {
+  ): Promise<CookieResolutionResult> {
     const selectorsAttempted: string[] = []
     let stepsExecuted = 0
 
     // Combine all selectors (primary first, then fallback)
     const allSelectors = [...plan.primarySelectors, ...plan.fallbackSelectors]
 
-    // Execute up to maxSteps
-    for (let step = 0; step < plan.maxSteps && stepsExecuted < plan.maxSteps; step++) {
+    // Hard limit: Maximum 2 attempts total
+    const maxAttempts = Math.min(plan.maxSteps, this.maxAttempts)
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       // Find next actionable selector
       let actionableSelector: string | null = null
 
@@ -221,6 +534,7 @@ IMPORTANT:
 
       // Hard exit: No actionable selector found
       if (!actionableSelector) {
+        console.log('[CookieBannerHandler] No actionable selectors found')
         return {
           outcome: 'BLOCKED',
           strategy: plan.strategy,
@@ -234,13 +548,16 @@ IMPORTANT:
       this.attemptedSelectors.add(actionableSelector)
       selectorsAttempted.push(actionableSelector)
 
-      // Execute action
       try {
+        // STATE 2: CLICK
         const element = page.locator(actionableSelector).first()
-        await element.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {})
+        const buttonText = await element.textContent().catch(() => actionableSelector) || actionableSelector
+        this.logEmitter?.log(`Attempting to close cookie banner`)
+        this.logEmitter?.log(`Clicking '${buttonText}' button`, { selector: actionableSelector })
+
+        await element.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => { })
         await page.waitForTimeout(300)
 
-        // Click
         await element.click({ timeout: 3000, force: false }).catch(() => {
           // Try force click if normal click fails
           return element.click({ timeout: 3000, force: true })
@@ -248,45 +565,114 @@ IMPORTANT:
 
         stepsExecuted++
 
-        // Wait for potential dismissal
-        await page.waitForTimeout(1000)
+        // STATE 3: WAIT (CRITICAL - randomized delay for animations/JS callbacks)
+        // MANDATORY: This wait MUST occur before verification
+        const waitMs = 300 + Math.random() * 500 // 300-800ms randomized
+        this.logEmitter?.log(`Waiting for banner to close (${Math.round(waitMs)}ms)`)
+        await page.waitForTimeout(waitMs)
 
-        // Verify banner removal
-        const isDismissed = await this.verifyDismissal(page, actionableSelector)
-        if (isDismissed) {
+        // STATE 4: VERIFY (DOM FIRST) - MANDATORY POST-CLICK VERIFICATION
+        this.logEmitter?.log('Verifying banner dismissal using DOM checks')
+        const domVerification = await this.verifyDismissalDOM(page, actionableSelector)
+
+        if (domVerification.dismissed) {
+          this.logEmitter?.log('Cookie banner resolved')
           return {
-            outcome: 'DISMISSED',
+            outcome: 'RESOLVED',
             strategy: plan.strategy,
             selectorsAttempted,
             stepsExecuted,
           }
         }
 
-        // Check if DOM changed meaningfully (banner might be transitioning)
-        const domChanged = await this.checkDOMChange(page)
-        if (!domChanged && stepsExecuted >= plan.maxSteps) {
-          // No progress made, exit
+        // STATE 5: VERIFY (VISION ONLY IF DOM IS AMBIGUOUS)
+        if (!domVerification.dismissed && domVerification.ambiguous && this.visualConfirmationsUsed < this.maxVisualConfirmations) {
+          this.logEmitter?.log('DOM ambiguous, performing visual confirmation')
+          const visionResult = await this.verifyDismissalVision(page)
+
+          if (!visionResult) {
+            // Visual confirmation: banner not visible
+            this.logEmitter?.log('Visual confirmation: banner not visible')
+            this.logEmitter?.log('Cookie banner resolved')
+            return {
+              outcome: 'RESOLVED',
+              strategy: plan.strategy,
+              selectorsAttempted,
+              stepsExecuted,
+            }
+          } else {
+            // Visual confirmation: banner still visible
+            this.logEmitter?.log('Visual confirmation: banner still visible')
+            this.visualConfirmationsUsed++
+
+            // Allow ONE retry max if we haven't exceeded attempt limit
+            if (attempt < maxAttempts - 1) {
+              this.logEmitter?.log(`Allowing one retry (attempt ${attempt + 2}/${maxAttempts})`)
+              continue
+            }
+          }
+        } else if (!domVerification.dismissed && !domVerification.ambiguous) {
+          // DOM clearly shows banner is still present
+          // Allow ONE retry max if we haven't exceeded attempt limit
+          if (attempt < maxAttempts - 1) {
+            this.logEmitter?.log(`Banner still present, allowing one retry (attempt ${attempt + 2}/${maxAttempts})`)
+            continue
+          }
+        }
+
+        // STATE 6: RETRY LIMITS EXCEEDED
+        if (attempt >= maxAttempts - 1) {
+          this.logEmitter?.log(`Maximum attempts (${maxAttempts}) reached. Marking as RESOLVED_WITH_DELAY and continuing test`)
           return {
-            outcome: 'BLOCKED',
+            outcome: 'RESOLVED_WITH_DELAY',
             strategy: plan.strategy,
             selectorsAttempted,
-            reason: 'Banner persisted after maxSteps with no DOM change',
+            reason: `Banner persisted after ${stepsExecuted} attempts, continuing test`,
             stepsExecuted,
           }
         }
       } catch (error: any) {
         // Action failed, try next selector
-        console.warn(`[CookieBannerHandler] Action failed for ${actionableSelector}:`, error.message)
+        this.logEmitter?.log(`Action failed for ${actionableSelector}`, { error: error.message })
         continue
       }
     }
 
-    // Hard exit: Banner persists after maxSteps
+    // Hard exit: Banner persists after maxAttempts
+    this.logEmitter?.log(`Banner persisted in DOM after ${stepsExecuted} attempts. Performing final Visual Verification...`)
+
+    // VISUAL TRUTH CHECK: Use AI Vision to confirm if banner is REALLY there
+    const finalVisualCheck = await this.verifyDismissalVision(page)
+
+    if (!finalVisualCheck) {
+      // Vision says it's gone (DOM was lying/laggy)
+      this.logEmitter?.log('Visual Verification Passed: Banner is NOT visible. DOM was out of sync.')
+      return {
+        outcome: 'RESOLVED',
+        strategy: plan.strategy,
+        selectorsAttempted,
+        stepsExecuted,
+      }
+    }
+
+    // Vision confirms it is actually there
+    this.logEmitter?.log('Visual Verification Failed: Banner is visually confirmed to be present.')
+
+    // Capture evidence of failure
+    try {
+      const screenshot = await page.screenshot({ fullPage: false, type: 'jpeg', quality: 60 })
+      const screenshotPath = `cookie_failure_${Date.now()}.jpg`
+      // We aren't uploading here directly, but the log emitter might handle it or we contextually log it
+      this.logEmitter?.log(`Captured evidence of cookie banner failure: ${screenshotPath}`)
+    } catch (e) {
+      console.warn('Failed to capture cookie failure screenshot')
+    }
+
     return {
-      outcome: 'BLOCKED',
+      outcome: 'RESOLVED_WITH_DELAY',
       strategy: plan.strategy,
       selectorsAttempted,
-      reason: `Banner persisted after ${stepsExecuted} steps`,
+      reason: `Visual Verification confirmed banner persist after ${stepsExecuted} attempts.`,
       stepsExecuted,
     }
   }
@@ -340,20 +726,146 @@ IMPORTANT:
   }
 
   /**
-   * Verify banner was dismissed
+   * Verify banner dismissal using DOM checks (STATE 4: VERIFY DOM FIRST)
+   * Returns: { dismissed: boolean, ambiguous: boolean }
+   * - dismissed: true if banner is clearly dismissed
+   * - ambiguous: true if DOM signals are inconclusive (needs visual confirmation)
    */
-  private async verifyDismissal(page: Page, selector: string): Promise<boolean> {
+  private async verifyDismissalDOM(page: Page, clickedSelector: string): Promise<{ dismissed: boolean; ambiguous: boolean }> {
     try {
       // Check if clicked element is still visible
-      const element = page.locator(selector).first()
+      const element = page.locator(clickedSelector).first()
       const stillVisible = await element.isVisible({ timeout: 500 }).catch(() => false)
 
       // If element is gone, banner was likely dismissed
       if (!stillVisible) {
-        return true
+        // Double-check: look for banner container
+        const bannerContainer = await this.findBannerContainer(page)
+        if (!bannerContainer) {
+          return { dismissed: true, ambiguous: false }
+        }
       }
 
-      // Check for common cookie banner indicators
+      // Comprehensive DOM checks for banner dismissal
+      const bannerState = await page.evaluate(() => {
+        // Find all potential cookie banner elements
+        const cookieSelectors = [
+          '[id*="cookie" i]',
+          '[class*="cookie" i]',
+          '[id*="consent" i]',
+          '[class*="consent" i]',
+          '[id*="banner" i]',
+          '[class*="banner" i]',
+        ]
+
+        const banners: Array<{
+          element: Element
+          display: string
+          visibility: string
+          opacity: string
+          pointerEvents: string
+          rect: DOMRect
+          offscreen: boolean
+        }> = []
+
+        for (const selector of cookieSelectors) {
+          try {
+            const elements = document.querySelectorAll(selector)
+            elements.forEach((el) => {
+              const style = window.getComputedStyle(el)
+              const rect = el.getBoundingClientRect()
+              const viewportHeight = window.innerHeight
+              const viewportWidth = window.innerWidth
+
+              banners.push({
+                element: el,
+                display: style.display,
+                visibility: style.visibility,
+                opacity: style.opacity,
+                pointerEvents: style.pointerEvents,
+                rect: {
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height,
+                  top: rect.top,
+                  left: rect.left,
+                  bottom: rect.bottom,
+                  right: rect.right,
+                } as DOMRect,
+                offscreen: rect.bottom < 0 || rect.top > viewportHeight || rect.right < 0 || rect.left > viewportWidth,
+              })
+            })
+          } catch (e) {
+            // Ignore selector errors
+          }
+        }
+
+        return banners
+      })
+
+      if (bannerState.length === 0) {
+        // No cookie banner elements found in DOM
+        return { dismissed: true, ambiguous: false }
+      }
+
+      // Check each banner element for dismissal signals
+      let clearlyDismissed = 0
+      let clearlyVisible = 0
+      let ambiguousCount = 0
+
+      for (const banner of bannerState) {
+        const isDisplayNone = banner.display === 'none'
+        const isHidden = banner.visibility === 'hidden'
+        const opacity = parseFloat(banner.opacity)
+        const isLowOpacity = opacity < 0.05
+        const isPointerEventsDisabled = banner.pointerEvents === 'none'
+        const isOffscreen = banner.offscreen
+        const hasZeroSize = banner.rect.width === 0 || banner.rect.height === 0
+
+        // Clearly dismissed: display:none OR opacity < 0.05 OR offscreen OR zero size
+        if (isDisplayNone || isLowOpacity || isOffscreen || hasZeroSize) {
+          clearlyDismissed++
+        }
+        // Clearly visible: visible, non-zero opacity, in viewport, has size
+        else if (!isHidden && opacity >= 0.1 && !isOffscreen && !hasZeroSize && !isPointerEventsDisabled) {
+          clearlyVisible++
+        }
+        // Ambiguous: hidden but not display:none, or low opacity but not zero
+        else {
+          ambiguousCount++
+        }
+      }
+
+      // If all banners are clearly dismissed
+      if (clearlyDismissed > 0 && clearlyVisible === 0) {
+        return { dismissed: true, ambiguous: false }
+      }
+
+      // If any banner is clearly visible
+      if (clearlyVisible > 0) {
+        return { dismissed: false, ambiguous: false }
+      }
+
+      // If ambiguous (transitioning state, low opacity, etc.)
+      if (ambiguousCount > 0) {
+        return { dismissed: false, ambiguous: true }
+      }
+
+      // Default: assume dismissed if we can't determine
+      return { dismissed: true, ambiguous: false }
+    } catch (error: any) {
+      console.warn(`[CookieBannerHandler] DOM verification error:`, error.message)
+      // On error, treat as ambiguous (may need visual confirmation)
+      return { dismissed: false, ambiguous: true }
+    }
+  }
+
+  /**
+   * Find banner container element (helper for DOM verification)
+   */
+  private async findBannerContainer(page: Page): Promise<boolean> {
+    try {
       const cookieIndicators = [
         ':has-text("cookie")',
         ':has-text("consent")',
@@ -363,19 +875,95 @@ IMPORTANT:
         '[class*="consent" i]',
       ]
 
-      let visibleCount = 0
       for (const indicator of cookieIndicators) {
         const count = await page.locator(indicator).count().catch(() => 0)
         if (count > 0) {
           const isVisible = await page.locator(indicator).first().isVisible({ timeout: 500 }).catch(() => false)
-          if (isVisible) visibleCount++
+          if (isVisible) return true
         }
       }
 
-      // If no cookie indicators visible, banner was dismissed
-      return visibleCount === 0
+      return false
     } catch {
       return false
+    }
+  }
+
+  /**
+   * Verify banner dismissal using GPT-4o visual confirmation (STATE 5: VISION IF AMBIGUOUS)
+   * Returns: true if banner is still visible, false if not visible
+   * Only called when DOM verification is ambiguous
+   */
+  private async verifyDismissalVision(page: Page): Promise<boolean> {
+    try {
+      // Take screenshot
+      const screenshot = await page.screenshot({ type: 'png', fullPage: false })
+      const screenshotBase64 = screenshot.toString('base64')
+
+      // Call GPT-4o with binary question
+      const apiKey = process.env.OPENAI_API_KEY
+      if (!apiKey) {
+        console.warn('[CookieBannerHandler] OPENAI_API_KEY not available for visual confirmation')
+        return true // Assume visible if we can't verify
+      }
+
+      const apiUrl = process.env.OPENAI_API_URL || 'https://api.openai.com/v1'
+      const visionModel = process.env.VISION_MODEL || 'gpt-4o'
+
+      const response = await axios.post(
+        `${apiUrl}/chat/completions`,
+        {
+          model: visionModel,
+          temperature: 0.2,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a web automation assistant. Answer with JSON only: {"bannerVisible": true/false}',
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Is a cookie consent banner still visible on this page? Answer with JSON: {"bannerVisible": true/false}',
+                },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:image/png;base64,${screenshotBase64}`,
+                  },
+                },
+              ],
+            },
+          ],
+          response_format: { type: 'json_object' },
+          max_tokens: 50,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 15000,
+        }
+      )
+
+      const content = response.data.choices?.[0]?.message?.content
+      if (!content) {
+        return true // Assume visible if we can't parse
+      }
+
+      // ADMIN ONLY: Log GPT-4o Vision token usage for cost tracking
+      const usage = response.data.usage
+      if (usage) {
+        console.log(`[TokenUsage][GPT-4o-Vision] Call: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}, total=${usage.total_tokens}`)
+      }
+
+      const parsed = JSON.parse(content)
+      return parsed.bannerVisible === true
+    } catch (error: any) {
+      console.warn(`[CookieBannerHandler] Visual confirmation error:`, error.message)
+      return true // Assume visible on error (safer to retry)
     }
   }
 
@@ -399,9 +987,14 @@ IMPORTANT:
   /**
    * Reset handler state (for new test runs)
    */
-  reset(): void {
+  reset(runId?: string): void {
     this.attemptedSelectors.clear()
     this.pagesProcessed.clear()
+    this.visualConfirmationsUsed = 0
+    // Reset cookie status for the run
+    if (runId) {
+      resetCookieStatus(runId)
+    }
   }
 }
 

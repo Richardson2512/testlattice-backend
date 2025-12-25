@@ -97,9 +97,28 @@ connection.on('reconnecting', (delay: number) => {
   console.log(`🔄 Redis reconnecting in ${delay}ms...`)
 })
 
-// Initialize Unified Brain Service (GPT-5 Mini for all text/reasoning)
-const unifiedBrain = new UnifiedBrainService()
-console.log('✅ Unified Brain Service initialized (GPT-5 Mini)')
+// Initialize Unified Brain Service for GUEST tests (GPT-5 Mini)
+// Uses OPENAI_API_KEY - token tracking labeled as [Guest]
+const guestBrain = new UnifiedBrainService()
+console.log('✅ Guest Brain Service initialized (GPT-5 Mini, OPENAI_API_KEY)')
+
+// Initialize Unified Brain Service for REGISTERED tests (GPT-5 Mini)
+// Uses OPENAI_API_KEY_REGISTERED for separate rate limits and cost tracking
+let registeredBrain: UnifiedBrainService
+const registeredApiKey = process.env.OPENAI_API_KEY_REGISTERED
+if (registeredApiKey) {
+  // Temporarily swap API key for registered brain initialization
+  const originalKey = process.env.OPENAI_API_KEY
+  process.env.OPENAI_API_KEY = registeredApiKey
+  registeredBrain = new UnifiedBrainService()
+  process.env.OPENAI_API_KEY = originalKey // Restore
+  console.log('✅ Registered Brain Service initialized (GPT-5 Mini, OPENAI_API_KEY_REGISTERED)')
+} else {
+  // Fall back to guest brain if no separate key
+  console.log('ℹ️  OPENAI_API_KEY_REGISTERED not set, using same brain for both test types')
+  registeredBrain = guestBrain
+}
+
 // Initialize storage service with Supabase configuration
 // IMPORTANT: Use SERVICE_ROLE_KEY for storage operations to bypass RLS policies
 // Uses config which validates env vars at startup
@@ -111,8 +130,8 @@ const supabaseAnonKey = config.supabase.storageKey || config.supabase.serviceRol
 const supabaseBucket = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts'
 
 // Use service role key (required for storage), fall back to anon key only if service role not available
+// Use service role key (required for storage), fall back to anon key only if service role not available
 const storageKey = supabaseServiceRoleKey || supabaseAnonKey
-const storageService = new StorageService(supabaseUrl, storageKey, supabaseBucket)
 
 // Initialize Wasabi storage for heavy artifacts (videos, screenshots, traces)
 import { createWasabiStorage, WasabiStorageService } from './services/wasabiStorage'
@@ -129,6 +148,9 @@ if (config.wasabi.enabled) {
 } else {
   console.log('ℹ️  Wasabi storage disabled (using Supabase for all artifacts)')
 }
+
+// Pass wasabiStorage to StorageService (facade)
+const storageService = new StorageService(supabaseUrl, storageKey, supabaseBucket, wasabiStorage)
 
 traceService = createTraceService(wasabiStorage)
 console.log('✅ TraceService initialized')
@@ -189,9 +211,10 @@ if (visionApiKey) {
 }
 
 // Create test processor for registered users (full diagnosis + execution)
+// Uses SEPARATE brain with OPENAI_API_KEY_REGISTERED for isolated billing
 // AppiumRunner is nullable - mobile tests will be rejected if Appium is disabled
 const testProcessor = new TestProcessor(
-  unifiedBrain, // Unified Brain Service (GPT-5 Mini for text/reasoning)
+  registeredBrain, // Separate brain for registered tests
   storageService,
   getPineconeService(), // Use lazy getter - will return null if API key not available
   playwrightRunner,
@@ -201,9 +224,10 @@ const testProcessor = new TestProcessor(
 )
 
 // Create guest test processor (no diagnosis, simplified flow)
+// Uses SEPARATE brain with OPENAI_API_KEY for isolated billing
 import { GuestTestProcessor } from './processors/GuestTestProcessor'
 const guestProcessor = new GuestTestProcessor(
-  unifiedBrain,
+  guestBrain, // Separate brain for guest tests
   storageService,
   playwrightRunner
 )

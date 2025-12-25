@@ -179,7 +179,7 @@ export class WasabiStorageService {
     async uploadTraceFile(runId: string, traceFilePath: string): Promise<string> {
         const fs = await import('fs')
         const path = await import('path')
-        
+
         // Determine file extension
         const ext = path.extname(traceFilePath)
         const isGzip = ext === '.gz'
@@ -201,7 +201,25 @@ export class WasabiStorageService {
 
         const sizeMB = (traceBuffer.length / 1024 / 1024).toFixed(2)
         console.log(`[Wasabi] Playwright trace file uploaded: ${key} (${sizeMB}MB)`)
-        
+
+        return `${this.baseUrl}/${key}`
+    }
+
+    /**
+     * Upload trace buffer (ZIP)
+     */
+    async uploadTraceBuffer(runId: string, buffer: Buffer, browserType?: string): Promise<string> {
+        const browserSuffix = browserType ? `-${browserType}` : ''
+        const key = `runs/${runId}/trace${browserSuffix}.zip`
+
+        await this.client.send(new PutObjectCommand({
+            Bucket: this.bucket,
+            Key: key,
+            Body: buffer,
+            ContentType: 'application/zip',
+        }))
+
+        console.log(`[Wasabi] Trace buffer uploaded: ${key}`)
         return `${this.baseUrl}/${key}`
     }
 
@@ -210,7 +228,7 @@ export class WasabiStorageService {
      */
     async getTraceFileUrl(runId: string, expiresIn: number = 7 * 24 * 60 * 60): Promise<string | null> {
         const key = `runs/${runId}/trace.zip`
-        
+
         try {
             // Check if file exists
             await this.client.send(new HeadObjectCommand({

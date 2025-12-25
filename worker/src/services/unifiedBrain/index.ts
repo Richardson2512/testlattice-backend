@@ -36,13 +36,19 @@ export class UnifiedBrainService {
     private actionGenerator: ActionGenerator
 
     constructor() {
+        // Determine client label based on which API key is being used
+        const registeredApiKey = process.env.OPENAI_API_KEY_REGISTERED
+        const currentApiKey = process.env.OPENAI_API_KEY || ''
+        const clientLabel = (registeredApiKey && currentApiKey === registeredApiKey) ? 'Registered' : 'Guest'
+
         // Create GPT-5 Mini configuration from environment
         const config: ModelConfig = {
             apiUrl: process.env.OPENAI_API_URL || 'https://api.openai.com/v1',
-            apiKey: process.env.OPENAI_API_KEY || '',
+            apiKey: currentApiKey,
             model: process.env.OPENAI_MODEL || 'gpt-5-mini',
             temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '0.3'),
             maxTokens: parseInt(process.env.OPENAI_MAX_TOKENS || '4096', 10),
+            clientLabel,
         }
 
         // Validate API key
@@ -58,7 +64,7 @@ export class UnifiedBrainService {
         this.actionGenerator = new ActionGenerator(this.modelClient)
 
         if (DEBUG_LLM) {
-            console.log('UnifiedBrainService initialized (GPT-5 Mini)')
+            console.log(`UnifiedBrainService [${clientLabel}] initialized (GPT-5 Mini)`)
             console.log(`  Model: ${config.model} at ${config.apiUrl}`)
         }
     }

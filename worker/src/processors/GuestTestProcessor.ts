@@ -25,6 +25,21 @@ import { ComprehensiveTestingService } from '../services/comprehensiveTesting'
 import { WasabiStorageService, createWasabiStorage } from '../services/wasabiStorage'
 import { TraceService, createTraceService } from '../services/traceService'
 import Redis from 'ioredis'
+import { UnifiedPreflightService } from '../services/unifiedPreflightService'
+import { getExecutionLogEmitter } from '../services/executionLogEmitter'
+import { getCookieStatus } from '../services/cookieStatusTracker'
+import { AuthenticationFlowAnalyzer } from '../services/authenticationFlowAnalyzer'
+import {
+    setPreflightStatus,
+    getPreflightStatus,
+    resetPreflightStatus,
+    assertPreflightCompletedBeforeScreenshot,
+    assertPreflightCompletedBeforeDOMSnapshot,
+    assertPreflightCompletedBeforeAIAnalysis,
+    assertNoIRLDuringPreflight,
+} from '../services/preflightInvariants'
+import { SuccessEvaluator } from '../services/successEvaluator'
+
 
 export interface GuestProcessResult {
     success: boolean
@@ -48,6 +63,7 @@ export class GuestTestProcessor {
     private storageService: StorageService
     private playwrightRunner: PlaywrightRunner
     private redis: Redis
+    private successEvaluator: SuccessEvaluator
     private apiUrl: string
     private comprehensiveTesting: ComprehensiveTestingService
     private streamer: WebRTCStreamer | null = null
@@ -55,6 +71,8 @@ export class GuestTestProcessor {
     private runLogger: RunLogger
     private contextSynthesizer: ContextSynthesizer
     private testExecutor: TestExecutor
+    private unifiedPreflight: UnifiedPreflightService
+    private authFlowAnalyzer: AuthenticationFlowAnalyzer
 
     // Wasabi storage for guest artifacts (24hr retention)
     private wasabiStorage: WasabiStorageService | null = null
@@ -72,8 +90,11 @@ export class GuestTestProcessor {
         this.unifiedBrain = unifiedBrain
         this.storageService = storageService
         this.playwrightRunner = playwrightRunner
+        this.storageService = storageService
+        this.playwrightRunner = playwrightRunner
         this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
-        
+        this.successEvaluator = new SuccessEvaluator()
+
         // Use environment variables directly with fallbacks (don't depend on config object)
         // This prevents "config is not defined" errors if config initialization fails
         const apiUrl = process.env.API_URL || 'http://localhost:3001'
@@ -107,6 +128,13 @@ export class GuestTestProcessor {
         this.runLogger = new RunLogger(storageService, null, this.apiUrl)
         this.contextSynthesizer = new ContextSynthesizer(unifiedBrain, this.comprehensiveTesting)
         this.testExecutor = new TestExecutor(playwrightRunner, null, this.retryLayer)
+        this.authFlowAnalyzer = new AuthenticationFlowAnalyzer()
+        this.unifiedPreflight = new UnifiedPreflightService(
+            unifiedBrain,
+            this.contextSynthesizer,
+            this.comprehensiveTesting,
+            playwrightRunner
+        )
     }
 
     /**
@@ -139,20 +167,96 @@ export class GuestTestProcessor {
 
             console.log(`[${runId}] Browser session reserved: ${session.id}`)
 
-            // Navigate to target URL using executeAction
+            // 1. Create and Broadcast PENDING Navigation Step (Loading State)
+            const navStep: TestStep = {
+                id: `step_${runId}_nav`,
+                stepNumber: 1,
+                action: 'navigate',
+                target: `Loading ${build.url}...`,
+                value: build.url || '',
+                timestamp: new Date().toISOString(),
+                success: undefined, // Indicates pending/running state
+                environment: { browser: 'chromium', viewport: '1280x720' }
+            }
+            steps.push(navStep)
+            this.broadcastStep(runId, navStep)
+
+            // 2. Execute Navigation
             await this.playwrightRunner.executeAction(session.id, {
                 action: 'navigate',
                 value: build.url || '',
                 description: 'Navigate to target URL',
-            })
+            }, { timeout: 60000, waitUntil: 'domcontentloaded' })
             console.log(`[${runId}] Navigated to: ${build.url}`)
+
+            // 3. Update Step to Success
+            navStep.success = true // Mark as success
+            navStep.target = build.url || 'Target URL' // Remove "Loading..." text
+            this.broadcastStep(runId, navStep) // Broadcast update
+
+            // UNIFIED PREFLIGHT PHASE (blocking)
+            // EXECUTION ORDER: NAVIGATE → PREFLIGHT → TEST EXECUTION
+            // Preflight handles ALL blocking UI (cookie banners, popups, overlays)
+            if (session.page) {
+                // Reset preflight status for new test run
+                resetPreflightStatus(runId)
+                setPreflightStatus(runId, 'IN_PROGRESS')
+
+                const sessionData = this.playwrightRunner.getSession(session.id)
+                if (!sessionData?.page) {
+                    throw new Error(`Session ${session.id} not found or page not available`)
+                }
+
+                // Execute unified preflight
+                const preflightResult = await this.unifiedPreflight.executePreflight(
+                    sessionData.page,
+                    build.url || '',
+                    runId,
+                    build.url || ''
+                )
+
+                // Mark preflight as completed
+                setPreflightStatus(runId, 'COMPLETED')
+
+                // Create preflight step record
+                const preflightStep: TestStep = {
+                    id: `step_${runId}_preflight`,
+                    stepNumber: 2,
+                    action: 'preflight',
+                    target: 'Unified Preflight Phase',
+                    value: preflightResult.success
+                        ? `Completed: ${preflightResult.popupsResolved} popup(s) resolved`
+                        : `Failed: ${preflightResult.errors.join('; ')}`,
+                    timestamp: new Date().toISOString(),
+                    success: preflightResult.success,
+                    metadata: {
+                        cookieResult: preflightResult.cookieResult,
+                        nonCookiePopups: preflightResult.nonCookiePopups,
+                        popupsResolved: preflightResult.popupsResolved,
+                        popupsSkipped: preflightResult.popupsSkipped,
+                        executionTrace: preflightResult.executionTrace,
+                        executionLogs: getExecutionLogEmitter(runId, 0).getLogs(),
+                    } as any,
+                    environment: {
+                        browser: 'chromium',
+                        viewport: '1280x720',
+                    },
+                }
+                steps.push(preflightStep)
+                this.broadcastStep(runId, preflightStep)
+
+                console.log(`[${runId}] Preflight completed: ${preflightResult.popupsResolved} popup(s) resolved`)
+            }
 
             // DEBUG: File logging
             try {
                 const fs = await import('fs');
                 const path = await import('path');
                 const logPath = path.resolve(process.cwd(), 'guest-debug.log');
-                const log = (msg: string) => fs.appendFileSync(logPath, `[${new Date().toISOString()}] [${runId}] ${msg}\n`);
+                const log = (msg: string) => {
+                    fs.appendFileSync(logPath, `[${new Date().toISOString()}] [${runId}] ${msg}\n`);
+                    this.broadcastLog(runId, msg);
+                };
 
                 log(`Starting guest test for ${build.url} (Type: ${options?.guestTestType || 'default'})`);
 
@@ -239,7 +343,7 @@ export class GuestTestProcessor {
         artifacts: string[]
     ): Promise<GuestProcessResult> {
         const startTime = Date.now()
-        let stepNumber = 0
+        let stepNumber = steps.length // Continue numbering from existing steps
 
         // Build goal based on guest test type
         const guestTestType = options.guestTestType
@@ -279,17 +383,23 @@ export class GuestTestProcessor {
         const visitedSelectors = new Set<string>()
         const visitedUrls = new Set<string>([targetUrl])
         const history: Array<{ action: LLMAction; timestamp: string }> = []
-        
+
         // Track mobile viewport testing for visual tests
         let mobileViewportTested = false
-        
+
         // Track attempted selectors for fallback guard (prevent infinite loops)
         const attemptedSelectors = new Set<string>()
-        
+
         // Track progress to detect stuck states
         let lastSuccessfulStep = 0
         let consecutiveFailures = 0
         const MAX_CONSECUTIVE_FAILURES = 5
+
+        // Authentication flow analysis state
+        let authAnalysis: any = null
+        let urlBeforeLogin: string | null = null
+        let loginAttempted = false
+        let signupAttempted = false
 
         // Main execution loop
         while (stepNumber < this.MAX_GUEST_STEPS && Date.now() - startTime < this.MAX_DURATION_MS) {
@@ -301,9 +411,25 @@ export class GuestTestProcessor {
                 const fs = await import('fs');
                 const path = await import('path');
                 const logPath = path.resolve(process.cwd(), 'guest-debug.log');
-                const log = (msg: string) => fs.appendFileSync(logPath, `[${new Date().toISOString()}] [${runId}] [Step ${stepNumber}] ${msg}\n`);
+                const log = (msg: string) => {
+                    fs.appendFileSync(logPath, `[${new Date().toISOString()}] [${runId}] [Step ${stepNumber}] ${msg}\n`);
+                    this.broadcastLog(runId, msg, stepNumber);
+                };
 
                 log('Synthesizing context...');
+
+                // INVARIANT: Cookie handling must be completed before context synthesis
+                // This ensures screenshots, visual testing, and AI planning run after cookie handling
+                const cookieStatus = getCookieStatus(runId)
+                if (cookieStatus !== 'COMPLETED') {
+                    const errorMsg = `INVARIANT VIOLATION: Context synthesis attempted before cookie handling completed. Status: ${cookieStatus}. This indicates pre-flight phase did not complete.`
+                    if (process.env.NODE_ENV === 'development') {
+                        throw new Error(errorMsg)
+                    }
+                    console.warn(`[${runId}] ${errorMsg}`)
+                    // In production, continue but log warning
+                }
+
                 const contextResult = await this.contextSynthesizer.synthesizeContext({
                     sessionId: session.id,
                     isMobile: false,
@@ -349,6 +475,7 @@ export class GuestTestProcessor {
                 // Execute action
                 console.log(`[${runId}] Step ${stepNumber}: ${action.action} ${action.target || action.selector || ''}`)
                 log('Executing action...');
+                const startTime = Date.now()
 
                 const executionResult = await this.testExecutor.executeAction({
                     sessionId: session.id,
@@ -363,6 +490,7 @@ export class GuestTestProcessor {
                     browserType: 'chromium',
                     stepNumber,
                 })
+                const duration = Date.now() - startTime
                 log('Action executed.');
 
                 // Capture state
@@ -391,15 +519,131 @@ export class GuestTestProcessor {
 
                 // Extract visual issues from comprehensiveData if available
                 let visualIssues = comprehensiveData?.visualIssues || []
-                
+
                 // Test-specific enhancements
                 let enhancedAccessibilityIssues = comprehensiveData?.accessibility || []
-                
+
+                // Authentication Flow Analysis: Detect auth methods (first step only for login/signup)
+                if ((guestTestType === 'login' || guestTestType === 'signup') && stepNumber === 1 && session.page) {
+                    try {
+                        const authMethods = await this.authFlowAnalyzer.detectAuthMethods(session.page, runId, stepNumber)
+                        authAnalysis = {
+                            authMethodsDetected: authMethods.authMethods,
+                            mfaDetected: authMethods.mfaDetected,
+                            ssoProviders: authMethods.ssoProviders,
+                        }
+                        if (guestTestType === 'login') {
+                            urlBeforeLogin = currentUrl || targetUrl
+                        }
+                    } catch (authError: any) {
+                        console.warn(`[${runId}] Auth method detection failed:`, authError.message)
+                    }
+                }
+
+                // Authentication Flow Analysis: Signup-specific analysis
+                if (guestTestType === 'signup' && session.page) {
+                    try {
+                        // Detect signup steps
+                        const signupSteps = await this.authFlowAnalyzer.analyzeSignupSteps(session.page, runId, stepNumber)
+                        if (!authAnalysis) authAnalysis = {}
+                        authAnalysis.signupStepsDetected = signupSteps.steps
+                        authAnalysis.currentStepIndex = signupSteps.currentStepIndex
+
+                        // Detect verification handoff
+                        const verification = await this.authFlowAnalyzer.detectVerificationHandoff(session.page, runId, stepNumber)
+                        authAnalysis.verificationHandoff = verification
+
+                        // Analyze password policy
+                        const passwordAnalysis = await this.authFlowAnalyzer.analyzePasswordPolicy(session.page, runId, stepNumber)
+                        if (!authAnalysis.passwordPolicySummary) {
+                            authAnalysis.passwordPolicySummary = passwordAnalysis.policy
+                            authAnalysis.passwordUxIssues = passwordAnalysis.issues
+                        }
+
+                        // Detect conversion blockers
+                        const blockers = await this.authFlowAnalyzer.detectConversionBlockers(session.page, runId, stepNumber)
+                        if (!authAnalysis.conversionBlockers) {
+                            authAnalysis.conversionBlockers = blockers
+                        }
+                    } catch (signupError: any) {
+                        console.warn(`[${runId}] Signup analysis failed:`, signupError.message)
+                    }
+                }
+
+                // Authentication Flow Analysis: Login-specific - detect rate limits after invalid attempts
+                if (guestTestType === 'login' && session.page && (action.action === 'click' || action.action === 'type')) {
+                    try {
+                        // Check if this was a login attempt (submit button click or form submission)
+                        const isLoginAttempt = action.selector?.includes('submit') ||
+                            action.target?.toLowerCase().includes('login') ||
+                            action.target?.toLowerCase().includes('sign in')
+
+                        if (isLoginAttempt) {
+                            loginAttempted = true
+                            await new Promise(resolve => setTimeout(resolve, 2000)) // Wait for response
+
+                            const rateLimit = await this.authFlowAnalyzer.detectRateLimit(session.page, runId, stepNumber)
+                            if (!authAnalysis) authAnalysis = {}
+                            authAnalysis.rateLimitDetection = rateLimit
+
+                            if (rateLimit.detected) {
+                                console.log(`[${runId}] Rate limit detected - stopping further attempts`)
+                                // Mark step to indicate rate limit
+                            }
+                        }
+                    } catch (rateLimitError: any) {
+                        console.warn(`[${runId}] Rate limit detection failed:`, rateLimitError.message)
+                    }
+                }
+
+                // Authentication Flow Analysis: Analyze UX issues after invalid attempts
+                if (guestTestType === 'login' && session.page && loginAttempted) {
+                    try {
+                        const uxIssues = await this.authFlowAnalyzer.analyzeAuthUXIssues(session.page, runId, stepNumber)
+                        if (!authAnalysis) authAnalysis = {}
+                        if (!authAnalysis.authUxIssues) {
+                            authAnalysis.authUxIssues = []
+                        }
+                        authAnalysis.authUxIssues.push(...uxIssues)
+                    } catch (uxError: any) {
+                        console.warn(`[${runId}] UX issue analysis failed:`, uxError.message)
+                    }
+                }
+
+                // Authentication Flow Analysis: Post-login validation
+                if (guestTestType === 'login' && session.page && loginAttempted && urlBeforeLogin) {
+                    try {
+                        // Check if login appears successful (no error messages, URL changed, etc.)
+                        const appearsSuccessful = await session.page.evaluate(() => {
+                            const hasError = !!document.querySelector('[class*="error" i], [role="alert"]')
+                            const hasUserUI = !!(
+                                document.querySelector('button:has-text("logout" i)') ||
+                                document.querySelector('button:has-text("sign out" i)') ||
+                                document.querySelector('[data-testid*="user-menu" i]')
+                            )
+                            return !hasError && hasUserUI
+                        })
+
+                        if (appearsSuccessful) {
+                            const validation = await this.authFlowAnalyzer.validatePostLoginSuccess(
+                                session.page,
+                                urlBeforeLogin,
+                                runId,
+                                stepNumber
+                            )
+                            if (!authAnalysis) authAnalysis = {}
+                            authAnalysis.postLoginValidation = validation
+                        }
+                    } catch (validationError: any) {
+                        console.warn(`[${runId}] Post-login validation failed:`, validationError.message)
+                    }
+                }
+
                 // Accessibility: Add heading hierarchy and keyboard trap validation
                 if (guestTestType === 'accessibility') {
                     const headingIssues = await this.validateHeadingHierarchy(session.id)
                     const keyboardTraps = await this.detectKeyboardTraps(session.id)
-                    
+
                     // Convert to accessibility issue format
                     enhancedAccessibilityIssues = [
                         ...enhancedAccessibilityIssues,
@@ -421,16 +665,16 @@ export class GuestTestProcessor {
                         })),
                     ]
                 }
-                
+
                 // Navigation: Explicitly check for 404 errors and console errors
                 if (guestTestType === 'navigation' && action.action === 'navigate') {
                     const currentUrlAfterNav = await this.playwrightRunner.getCurrentUrl(session.id).catch(() => currentUrl || '')
-                    const is404 = currentUrlAfterNav.includes('404') || 
-                                 (await session.page?.evaluate(() => {
-                                     const bodyText = document.body.textContent?.toLowerCase() || ''
-                                     return bodyText.includes('404') || bodyText.includes('not found') || bodyText.includes('page not found')
-                                 }).catch(() => false)) || false
-                    
+                    const is404 = currentUrlAfterNav.includes('404') ||
+                        (await session.page?.evaluate(() => {
+                            const bodyText = document.body.textContent?.toLowerCase() || ''
+                            return bodyText.includes('404') || bodyText.includes('not found') || bodyText.includes('page not found')
+                        }).catch(() => false)) || false
+
                     if (is404) {
                         // Add navigation error to step
                         const navError = {
@@ -439,6 +683,23 @@ export class GuestTestProcessor {
                             severity: 'high' as const,
                         }
                         visualIssues = [...visualIssues, navError]
+                    }
+                }
+
+                // Evaluate standard rules
+                // Data already in scope
+                let standardWarnings: any[] = []
+
+                if (comprehensiveData) {
+                    const evalResult = this.successEvaluator.evaluate(comprehensiveData)
+                    if (evalResult.status === 'soft-fail' || evalResult.status === 'warning') {
+                        evalResult.issues.forEach(issue => {
+                            standardWarnings.push({
+                                type: 'standard-rule',
+                                message: issue,
+                                severity: evalResult.status === 'soft-fail' ? 'warning' : 'info'
+                            })
+                        })
                     }
                 }
 
@@ -455,6 +716,20 @@ export class GuestTestProcessor {
                     success: true,
                     mode: 'llm',
                     selfHealing: executionResult.healing,
+                    healingReport: executionResult.healing ? {
+                        originalSelector: executionResult.healing.originalSelector || '',
+                        healedSelector: executionResult.healing.healedSelector,
+                        reason: executionResult.healing.note,
+                        confidence: executionResult.healing.confidence || 0,
+                    } : undefined,
+                    warnings: [
+                        ...(duration > 10000 && duration < 60000 ? [{
+                            type: 'performance',
+                            message: `Action took ${(duration / 1000).toFixed(1)}s (Threshold: 10s)`,
+                            severity: 'warning'
+                        }] : []),
+                        ...standardWarnings
+                    ],
                     // Persist comprehensive testing data (same pattern as TestProcessor)
                     consoleErrors: comprehensiveData?.consoleErrors?.map(e => ({
                         type: e.type,
@@ -484,9 +759,15 @@ export class GuestTestProcessor {
                         browser: 'chromium',
                         viewport: '1280x720',
                     },
+                    // Persist authentication flow analysis metadata
+                    metadata: authAnalysis ? {
+                        ...authAnalysis,
+                        executionLogs: getExecutionLogEmitter(runId, stepNumber).getLogs(),
+                    } : undefined,
                 }
 
                 steps.push(step)
+                this.broadcastStep(runId, step)
                 artifacts.push(artifactResult.screenshotUrl, artifactResult.domUrl)
 
                 // Update history
@@ -494,7 +775,7 @@ export class GuestTestProcessor {
                 if (action.selector) {
                     visitedSelectors.add(action.selector)
                 }
-                
+
                 // Track successful progress
                 lastSuccessfulStep = stepNumber
                 consecutiveFailures = 0
@@ -512,7 +793,7 @@ export class GuestTestProcessor {
 
                 // Track consecutive failures for progress detection
                 consecutiveFailures++
-                
+
                 // Record failed step
                 const failedStep: TestStep = {
                     id: `step_${runId}_${stepNumber}`,
@@ -524,7 +805,7 @@ export class GuestTestProcessor {
                     environment: { browser: 'chromium', viewport: '1280x720' },
                 }
                 steps.push(failedStep)
-                
+
                 // Try to save checkpoint even on failure (non-blocking)
                 try {
                     await this.runLogger.saveCheckpoint(runId, stepNumber, steps, artifacts)
@@ -533,7 +814,7 @@ export class GuestTestProcessor {
                 }
 
                 // Break if critical error or too many consecutive failures (stuck state)
-                if (stepError.message.includes('Navigation failed') || 
+                if (stepError.message.includes('Navigation failed') ||
                     stepError.message.includes('Page crashed') ||
                     consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                     console.log(`[${runId}] Breaking execution loop: ${consecutiveFailures} consecutive failures or critical error`)
@@ -546,32 +827,32 @@ export class GuestTestProcessor {
         if (guestTestType === 'visual' && !mobileViewportTested && steps.length > 0) {
             try {
                 console.log(`[${runId}] Starting mobile viewport pass (375x812) for visual testing`)
-                
+
                 // Switch to mobile viewport
                 await this.playwrightRunner.executeAction(session.id, {
                     action: 'setViewport',
                     value: '375x812',
                     description: 'Switch to mobile viewport for responsive testing',
                 })
-                
+
                 // Wait for layout to stabilize
                 await new Promise(resolve => setTimeout(resolve, 1000))
-                
+
                 // Navigate back to target URL to test mobile layout
                 await this.playwrightRunner.executeAction(session.id, {
                     action: 'navigate',
                     value: targetUrl,
                     description: 'Navigate to target URL in mobile viewport',
                 })
-                
+
                 await new Promise(resolve => setTimeout(resolve, 2000))
-                
+
                 // Capture mobile screenshot and context
                 const mobileStateResult = await this.testExecutor.captureState(session.id, false)
                 const mobileScreenshotBuffer = Buffer.isBuffer(mobileStateResult.screenshot)
                     ? mobileStateResult.screenshot
                     : Buffer.from(mobileStateResult.screenshot, 'base64')
-                
+
                 // Get comprehensive data for mobile viewport
                 const mobileContextResult = await this.contextSynthesizer.synthesizeContext({
                     sessionId: session.id,
@@ -590,10 +871,10 @@ export class GuestTestProcessor {
                     browserType: 'chromium',
                     testableComponents: [],
                 })
-                
+
                 const mobileComprehensiveData = mobileContextResult.comprehensiveData
                 const mobileVisualIssues = mobileComprehensiveData?.visualIssues || []
-                
+
                 // Log mobile artifacts
                 const mobileArtifactResult = await this.runLogger.logArtifacts({
                     runId,
@@ -602,7 +883,7 @@ export class GuestTestProcessor {
                     domSnapshot: mobileStateResult.domSnapshot,
                     metadata: { browser: 'chromium', viewport: '375x812' },
                 })
-                
+
                 // Create mobile viewport step
                 const mobileStep: TestStep = {
                     id: `step_${runId}_mobile`,
@@ -642,11 +923,11 @@ export class GuestTestProcessor {
                         viewport: '375x812',
                     },
                 }
-                
+
                 steps.push(mobileStep)
                 artifacts.push(mobileArtifactResult.screenshotUrl, mobileArtifactResult.domUrl)
                 mobileViewportTested = true
-                
+
                 console.log(`[${runId}] Mobile viewport testing completed`)
             } catch (mobileError: any) {
                 console.warn(`[${runId}] Mobile viewport testing failed:`, mobileError.message)
@@ -654,11 +935,21 @@ export class GuestTestProcessor {
             }
         }
 
+        // Reset authentication flow analyzer for next test
+        this.authFlowAnalyzer.reset()
+
         // Update final status
+        // For signup flows, check if verification handoff was detected
+        let finalStatus = TestRunStatus.COMPLETED
+        if (guestTestType === 'signup' && authAnalysis?.verificationHandoff?.required) {
+            // Mark as completed up to verification
+            console.log(`[${runId}] Signup completed up to verification requirement`)
+        }
+
         const success = steps.filter(s => s.success).length > steps.length * 0.5
         await this.updateTestRunStatus(
             runId,
-            success ? TestRunStatus.COMPLETED : TestRunStatus.FAILED,
+            success ? finalStatus : TestRunStatus.FAILED,
             undefined,
             steps
         )
@@ -684,13 +975,13 @@ export class GuestTestProcessor {
         // Use provided credentials or fall back to demo defaults
         const username = credentials?.username || credentials?.email || 'demo@example.com'
         const password = credentials?.password || 'DemoPass123!'
-        
+
         switch (testType) {
             case 'login':
-                return `LOGIN FLOW TEST: First, test negative paths: (1) Try submitting the login form with empty username/email field and verify error message appears and is visible. (2) Try submitting with empty password field and verify error message appears. (3) Try submitting with invalid credentials (use "invalid@test.com" and "wrongpass") and verify error message appears. Then test positive path: Find the login form, enter valid credentials (username/email: ${username}, password: ${password}), submit, and verify if login succeeds or fails. Look for login buttons, sign-in links, or authentication forms. When you find a username/email field, type "${username}". When you find a password field, type "${password}". Always check for error messages, loading states, and disabled submit buttons.`
+                return `AUTHENTICATION FLOW TESTING: First, detect and classify all authentication methods present (email+password, username+password, passwordless/magic link, SSO providers like Google/GitHub/Apple, MFA/OTP presence). DO NOT click SSO providers. DO NOT attempt to complete MFA/OTP. Then test negative paths: (1) Try submitting the login form with empty username/email field and verify error message appears and is visible. (2) Try submitting with empty password field and verify error message appears. (3) Try submitting with invalid credentials (use "invalid@test.com" and "wrongpass") and verify error message appears. After invalid attempts, check for UX issues: infinite loading spinners (>3s), disabled submit buttons, page reloads with no feedback, error messages without field highlights, error messages that disappear too quickly (<1s), error messages not associated with inputs. Then test positive path: Find the login form, enter valid credentials (username/email: ${username}, password: ${password}), submit, and verify if login succeeds. After successful login attempt, validate at least TWO of: presence of auth cookie/token, user-specific UI visible (avatar/logout/profile menu), guest-only UI removed, URL transition to authenticated route. If login appears successful but validations fail, mark as PARTIAL_SUCCESS. During invalid attempts, watch for rate limits/lockouts (CAPTCHA appearing, "too many attempts" messaging, temporary lock notices) and STOP immediately when detected (limit to ≤3 invalid attempts). When you find a username/email field, type "${username}". When you find a password field, type "${password}". Always check for error messages, loading states, and disabled submit buttons.`
 
             case 'signup':
-                return `SIGNUP FLOW TEST: First, check for CAPTCHA or verification blockers - if detected, mark test as BLOCKED. Then test required field validation: Try submitting the form with empty required fields and verify validation error messages appear and are visible near the affected fields. Test client-side validation: Enter invalid email format (e.g., "notanemail") and verify error message. Enter weak password if policy is visible and verify error message. Then test positive path: Find the registration/signup form, fill in all required fields with valid data (email: ${username}, password: ${password}), submit the form, and verify the result. When you find an email field, type "${username}". When you find a password field, type "${password}". Check for password policy hints (min length, special chars, etc.) and ensure all validation errors are clearly displayed.`
+                return `SIGN-UP & ONBOARDING VALIDATION: First, detect and report multi-step signup flows (number of steps, progress indicators, required vs optional steps). DO NOT auto-complete additional steps beyond the first. Then check for CAPTCHA or verification blockers - if detected, mark test as BLOCKED. Detect and classify verification handoff requirements: "Check your email" screens, OTP input fields, magic link instructions, SMS verification prompts. If verification is required, mark test outcome as COMPLETED_UP_TO_VERIFICATION. Extract and report password policy: minimum length, character requirements (uppercase, lowercase, numbers, special chars), strength meter presence, inline vs submit-time validation, error clarity (actionable vs vague). Test required field validation: Try submitting the form with empty required fields and verify validation error messages appear and are visible near the affected fields. Test client-side validation: Enter invalid email format (e.g., "notanemail") and verify error message. Enter weak password if policy is visible and verify error message. Detect conversion friction signals: CAPTCHA before/after submit, excessive required fields (>8), no inline validation, error resets entire form. Then test positive path: Find the registration/signup form, fill in all required fields with valid data (email: ${username}, password: ${password}), submit the form, and verify the result. When you find an email field, type "${username}". When you find a password field, type "${password}". Check for password policy hints (min length, special chars, etc.) and ensure all validation errors are clearly displayed.`
 
             case 'visual':
                 return `VISUAL TESTING: Explore the main UI elements on this page. Take screenshots of key areas, check for visual consistency, broken layouts, missing images, or rendering issues. Classify visual issues by severity (cosmetic vs blocking). Navigate to at most 2-3 additional pages for comparison. After desktop testing, switch to mobile viewport (375x812) and repeat visual checks to ensure responsive design works correctly.`
@@ -738,7 +1029,7 @@ export class GuestTestProcessor {
                         const tagName = element.tagName.toLowerCase()
                         const id = element.id || ''
                         const className = (element.className?.toString() || '').toLowerCase()
-                        
+
                         let type = 'unknown'
                         if (className.includes('recaptcha') || id.includes('recaptcha') || selector.includes('recaptcha')) {
                             type = 'recaptcha'
@@ -786,10 +1077,10 @@ export class GuestTestProcessor {
 
             const issues = await session.page.evaluate(() => {
                 const results: Array<{ type: string; message: string; severity: 'high' | 'medium' | 'low'; selector?: string }> = []
-                
+
                 const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'))
                 const h1Count = headings.filter(h => h.tagName.toLowerCase() === 'h1').length
-                
+
                 // Check for exactly one h1
                 if (h1Count === 0) {
                     results.push({
@@ -840,10 +1131,10 @@ export class GuestTestProcessor {
 
             const traps = await session.page.evaluate(() => {
                 const results: Array<{ type: string; message: string; severity: 'high' | 'medium' | 'low'; selector?: string }> = []
-                
+
                 // Check for elements with tabindex that might trap focus
                 const focusableElements = document.querySelectorAll('button, a, input, select, textarea, [tabindex]')
-                
+
                 focusableElements.forEach((el) => {
                     const tabIndex = el.getAttribute('tabindex')
                     // Elements with tabindex > 0 can create navigation issues
@@ -903,32 +1194,32 @@ export class GuestTestProcessor {
             const clickable = context.elements.find(e => {
                 // Must be clickable type
                 if (!(e.type === 'button' || e.type === 'link')) return false
-                
+
                 // Must have selector
                 if (!e.selector) return false
-                
+
                 // Must not be already visited
                 if (visitedSelectors.has(e.selector)) return false
-                
+
                 // Must not be already attempted (fallback guard)
                 if (attemptedSelectors.has(e.selector)) return false
-                
+
                 // Must be visible (check isHidden flag)
                 if (e.isHidden) return false
-                
+
                 // Additional visibility check via bounds (if available)
                 if (e.bounds) {
                     const { width, height } = e.bounds
                     if (width === 0 || height === 0) return false
                 }
-                
+
                 return true
             })
 
             if (clickable && clickable.selector) {
                 // Mark as attempted to prevent retry loops
                 attemptedSelectors.add(clickable.selector)
-                
+
                 return {
                     action: 'click',
                     target: clickable.text || 'Element',
@@ -943,7 +1234,7 @@ export class GuestTestProcessor {
             if (recentScrolls < 3) {
                 return { action: 'scroll', value: 'down', description: 'Fallback scroll (no actionable elements)' }
             }
-            
+
             // If stuck (no clickable elements, already scrolled), mark as complete to exit gracefully
             return { action: 'complete', description: 'No actionable elements found, test complete' }
         }
@@ -1008,7 +1299,8 @@ export class GuestTestProcessor {
     }
 
     /**
-     * Broadcast page state via Redis (non-blocking - failures don't affect test execution)
+     * Broadcast page state via Redis (non-blocking)
+     * Matches TestProcessor implementation for consistency
      */
     private broadcastPageState(runId: string, screenshot: Buffer | string, url: string): void {
         try {
@@ -1016,16 +1308,58 @@ export class GuestTestProcessor {
                 ? screenshot.toString('base64')
                 : screenshot
 
-            this.redis.publish(`test:${runId}:frame`, JSON.stringify({
-                type: 'frame',
-                screenshot: base64,
-                url,
-                timestamp: Date.now(),
+            this.redis.publish('ws:broadcast', JSON.stringify({
+                runId,
+                serverId: 'worker',
+                payload: {
+                    type: 'page_state',
+                    state: {
+                        screenshot: base64,
+                        url,
+                        elements: [] // Guest tests use image-only vision
+                    }
+                }
             }))
         } catch (error: any) {
-            // Redis broadcast failure is non-blocking - steps are still saved via API
-            // This ensures test execution continues even if Redis is unavailable
             console.warn(`[${runId}] Redis broadcast failed (non-blocking):`, error.message)
+        }
+    }
+
+    /**
+     * Broadcast test step to frontend
+     */
+    private broadcastStep(runId: string, step: TestStep): void {
+        try {
+            this.redis.publish('ws:broadcast', JSON.stringify({
+                runId,
+                serverId: 'worker',
+                payload: {
+                    type: 'test_step',
+                    step
+                }
+            }))
+        } catch (error: any) {
+            console.warn(`[${runId}] Step broadcast failed:`, error.message)
+        }
+    }
+
+    /**
+     * Broadcast log message to frontend
+     */
+    private broadcastLog(runId: string, message: string, stepNumber?: number): void {
+        try {
+            this.redis.publish('ws:broadcast', JSON.stringify({
+                runId,
+                serverId: 'worker',
+                payload: {
+                    type: 'log',
+                    message,
+                    timestamp: new Date().toISOString(),
+                    stepNumber
+                }
+            }))
+        } catch (error: any) {
+            // Ignore log broadcast errors
         }
     }
 
@@ -1077,6 +1411,7 @@ export class GuestTestProcessor {
             console.warn(`[${runId}] Video upload failed:`, err.message)
         }
     }
+
 }
 
 

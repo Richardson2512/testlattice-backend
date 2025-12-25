@@ -3,7 +3,12 @@
 
 import { Page } from 'playwright'
 import { LLMAction, SelfHealingInfo } from '../../types'
-import { HealingCandidate } from './types'
+interface HealingCandidate {
+    selector: string
+    strategy: SelfHealingInfo['strategy']
+    note: string
+    confidence: number
+}
 
 export class SelfHealing {
     /**
@@ -31,6 +36,7 @@ export class SelfHealing {
                     originalSelector,
                     healedSelector: candidate.selector,
                     note: candidate.note,
+                    confidence: candidate.confidence,
                 }
             } catch {
                 continue
@@ -70,6 +76,7 @@ export class SelfHealing {
                 selector: xpath,
                 strategy: 'fallback',
                 note: `Converted :has-text("${text}") selector to XPath text match`,
+                confidence: 0.95,
             })
         }
         return fallbacks
@@ -87,11 +94,13 @@ export class SelfHealing {
                 selector: `xpath=//*[self::button or self::a or @role="button"][contains(normalize-space(.), "${escaped}")]`,
                 strategy: 'text',
                 note: `Matched by visible text "${text}"`,
+                confidence: 0.9,
             },
             {
                 selector: `xpath=//*[contains(@aria-label, "${escaped}") or contains(@title, "${escaped}")]`,
                 strategy: 'text',
                 note: `Matched by aria-label/title containing "${text}"`,
+                confidence: 0.9,
             },
         ]
     }
@@ -116,6 +125,7 @@ export class SelfHealing {
                     selector: healed,
                     strategy: 'attribute',
                     note: `Used ID prefix "${stablePrefix}" to match dynamic IDs`,
+                    confidence: 0.8,
                 })
             }
         }
@@ -130,6 +140,7 @@ export class SelfHealing {
                     selector: `[${attrName}^="${trimmed}"]`,
                     strategy: 'attribute',
                     note: `Used ${attrName} prefix "${trimmed}" to bypass dynamic suffixes`,
+                    confidence: 0.8,
                 })
             }
         }
@@ -154,6 +165,7 @@ export class SelfHealing {
                     selector: stripped,
                     strategy: 'position',
                     note: 'Stripped dynamic attributes, kept structural selectors',
+                    confidence: 0.5,
                 },
             ]
         }

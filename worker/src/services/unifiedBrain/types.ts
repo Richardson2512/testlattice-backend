@@ -15,6 +15,12 @@ export interface ModelResponse {
             content: string
         }
     }>
+    // Token usage statistics (returned by OpenAI API)
+    usage?: {
+        prompt_tokens: number
+        completion_tokens: number
+        total_tokens: number
+    }
 }
 
 export interface ParsedInstructions {

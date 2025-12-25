@@ -1,10 +1,15 @@
 // Intelligent Retry Layer (IRL) - De-flaking AI-driven test automation
 // Wraps every step in retry policy, self-heals selectors, and allows AI to propose alternatives
+//
+// CRITICAL: IRL MUST respect ActionContext
+// - COOKIE_CONSENT context: IRL is COMPLETELY DISABLED
+// - No retries, no self-healing, no alternative strategies
 
 import { LLMAction, VisionContext, VisionElement, SelfHealingInfo, ActionExecutionResult } from '../types'
 import { UnifiedBrainService } from './unifiedBrainService'
 import { PlaywrightRunner, RunnerSession } from '../runners/playwright'
 import { AppiumRunner } from '../runners/appium'
+import { ActionContext, isIRLAllowed, isSelfHealingAllowed } from '../types/actionContext'
 
 export interface RetryConfig {
   maxRetries?: number
@@ -81,14 +86,28 @@ export class IntelligentRetryLayer {
   /**
    * Execute action with intelligent retry
    * Wraps every step in retry policy with self-healing
+   * 
+   * CRITICAL: If actionContext is COOKIE_CONSENT, IRL is COMPLETELY DISABLED
    */
   async executeWithRetry(
     sessionId: string,
     action: LLMAction,
     context: VisionContext,
     isMobile: boolean = false,
-    config?: RetryConfig
+    config?: RetryConfig,
+    actionContext: ActionContext = ActionContext.NORMAL
   ): Promise<RetryResult> {
+    // INVARIANT: IRL is FORBIDDEN in COOKIE_CONSENT context
+    if (!isIRLAllowed(actionContext)) {
+      // Return immediate failure - no retries, no healing, no alternatives
+      console.log(`[IRL] IRL disabled in ${actionContext} context - returning immediate failure`)
+      return {
+        success: false,
+        attempts: 1,
+        finalError: new Error(`IRL is disabled in ${actionContext} context`),
+      }
+    }
+
     const retryConfig = { ...this.defaultConfig, ...config }
     const runner = isMobile ? this.appiumRunner : this.playwrightRunner
 
@@ -139,8 +158,8 @@ export class IntelligentRetryLayer {
 
         console.log(`[IRL] Attempt ${attempt}/${retryConfig.maxRetries} failed: ${errorMessage}`)
 
-        // On first failure, try self-healing
-        if (attempt === 1 && action.selector) {
+        // On first failure, try self-healing (ONLY if allowed in context)
+        if (attempt === 1 && action.selector && isSelfHealingAllowed(actionContext)) {
           const healingResult = await this.attemptSelfHealing(
             sessionId,
             action,
@@ -270,6 +289,7 @@ export class IntelligentRetryLayer {
               originalSelector,
               healedSelector: textMatch,
               note: `Matched by text "${textHint}"`,
+              confidence: 0.9,
             }
           }
         }
@@ -283,6 +303,7 @@ export class IntelligentRetryLayer {
           originalSelector,
           healedSelector: attributeMatch,
           note: `Matched by attribute similarity`,
+          confidence: 0.8,
         }
       }
 
@@ -294,6 +315,7 @@ export class IntelligentRetryLayer {
           originalSelector,
           healedSelector: structuralMatch,
           note: `Matched by structural position`,
+          confidence: 0.5,
         }
       }
     } catch (error: any) {
@@ -341,6 +363,7 @@ export class IntelligentRetryLayer {
           originalSelector: action.selector!,
           healedSelector: bestMatch,
           note: `Matched via AI vision analysis`,
+          confidence: 0.85,
         }
       }
     } catch (error: any) {

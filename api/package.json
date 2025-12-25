@@ -11,9 +11,11 @@
     "test": "jest"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.958.0",
     "@fastify/cookie": "^6.0.0",
     "@fastify/cors": "^8.4.0",
     "@fastify/helmet": "^11.1.1",
+    "@polar-sh/sdk": "^0.42.1",
     "@sentry/node": "^7.120.4",
     "@sentry/profiling-node": "^10.25.0",
     "@supabase/supabase-js": "^2.38.0",

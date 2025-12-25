@@ -1,23 +1,86 @@
-// Billing routes (mocked - Stripe not configured)
+/**
+ * Billing routes - Polar.sh Payment Integration
+ */
 import { FastifyInstance } from 'fastify'
 import { config } from '../config/env'
+import {
+  createCheckoutSession,
+  getSubscription,
+  getTierFromProductId,
+  isAddOnProduct,
+  getAddOnVisualTests,
+  POLAR_PRODUCTS,
+} from '../services/polar'
+
+// Get Supabase client
+const getSupabaseClient = async () => {
+  const { createClient } = await import('@supabase/supabase-js')
+  return createClient(config.supabase.url, config.supabase.serviceRoleKey)
+}
 
 export async function billingRoutes(fastify: FastifyInstance) {
-  // Get usage stats
+
+  // Get current user's subscription/tier info
+  fastify.get('/subscription', async (request, reply) => {
+    try {
+      const userId = (request as any).userId // Set by auth middleware
+
+      if (!userId) {
+        return reply.code(401).send({ error: 'Unauthorized' })
+      }
+
+      const supabase = await getSupabaseClient()
+      const { data: subscription, error } = await supabase
+        .from('user_subscriptions')
+        .select('*')
+        .eq('user_id', userId)
+        .single()
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
+        throw error
+      }
+
+      // Return default free tier if no subscription found
+      const sub = subscription || {
+        tier: 'free',
+        status: 'active',
+        tests_used_this_month: 0,
+        visual_tests_used_this_month: 0,
+        addon_visual_tests: 0,
+      }
+
+      return reply.send({ subscription: sub })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to get subscription' })
+    }
+  })
+
+  // Get usage stats for current user
   fastify.get('/usage', async (request, reply) => {
     try {
-      // Mock usage data
+      const userId = (request as any).userId
+
+      if (!userId) {
+        return reply.code(401).send({ error: 'Unauthorized' })
+      }
+
+      const supabase = await getSupabaseClient()
+      const { data: subscription } = await supabase
+        .from('user_subscriptions')
+        .select('*')
+        .eq('user_id', userId)
+        .single()
+
       const usage = {
         period: {
-          start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-          end: new Date().toISOString(),
+          start: subscription?.current_period_start || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+          end: subscription?.current_period_end || new Date().toISOString(),
         },
-        testsRun: 42,
-        testsCompleted: 40,
-        testsFailed: 2,
-        totalMinutes: 120,
-        estimatedCost: 15.50,
-        currency: 'usd',
+        testsRun: subscription?.tests_used_this_month || 0,
+        visualTestsRun: subscription?.visual_tests_used_this_month || 0,
+        addonVisualTests: subscription?.addon_visual_tests || 0,
+        tier: subscription?.tier || 'free',
       }
 
       return reply.send({ usage })
@@ -27,110 +90,227 @@ export async function billingRoutes(fastify: FastifyInstance) {
     }
   })
 
-  // Get subscription info (mocked - replace with real Stripe integration when needed)
-  fastify.get('/subscription', async (request, reply) => {
-    try {
-      // NOTE: Currently using mock subscription data
-      // To implement real Stripe integration:
-      // 1. Install @stripe/stripe-js package
-      // 2. Initialize Stripe client with STRIPE_SECRET_KEY
-      // 3. Use stripe.subscriptions.retrieve() to get real subscription data
-      // Mock subscription data for development
-      const subscription = {
-        id: 'sub_mock_123',
-        status: 'active',
-        plan: 'pro',
-        currentPeriodStart: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-        currentPeriodEnd: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
-        cancelAtPeriodEnd: false,
-        items: [
-          {
-            id: 'item_mock_123',
-            price: {
-              id: 'price_mock_123',
-              amount: 9900,
-              currency: 'usd',
-              recurring: {
-                interval: 'month',
-              },
-            },
-          },
-        ],
-      }
-
-      return reply.send({ subscription })
-    } catch (error: any) {
-      fastify.log.error(error)
-      return reply.code(500).send({ error: error.message || 'Failed to get subscription' })
-    }
-  })
-
-  // Create checkout session (mocked - replace with real Stripe integration when needed)
+  // Create Polar checkout session
   fastify.post('/checkout', async (request, reply) => {
     try {
-      const { priceId, successUrl, cancelUrl } = request.body as any
-
-      // NOTE: Currently using mock checkout session
-      // To implement real Stripe integration:
-      // 1. Install @stripe/stripe-js package
-      // 2. Initialize Stripe client with STRIPE_SECRET_KEY
-      // 3. Use stripe.checkout.sessions.create() to create real checkout session
-      // Mock checkout session for development
-      const appUrl = config.appUrl || process.env.APP_URL || 'http://localhost:3000'
-      const session = {
-        id: 'cs_mock_' + Date.now(),
-        url: `https://checkout.stripe.com/mock-session/${Date.now()}`,
-        priceId: priceId || 'price_mock_123',
-        successUrl: successUrl || `${appUrl}/billing/success`,
-        cancelUrl: cancelUrl || `${appUrl}/billing/cancel`,
+      const { productId, tier, userId, userEmail } = request.body as {
+        productId?: string
+        tier?: string
+        userId?: string
+        userEmail?: string
       }
 
-      return reply.send({ session })
+      // Determine product ID from tier if not directly provided
+      let targetProductId = productId
+      if (!targetProductId && tier) {
+        targetProductId = (POLAR_PRODUCTS as Record<string, string>)[tier]
+      }
+
+      if (!targetProductId) {
+        return reply.code(400).send({ error: 'Product ID or tier is required' })
+      }
+
+      const appUrl = config.appUrl || process.env.APP_URL || 'http://localhost:3000'
+
+      // Determine success URL based on product/tier
+      const tierFromProduct = getTierFromProductId(targetProductId)
+      const successUrl = `${appUrl}/dashboard?checkout=success&tier=${tierFromProduct}`
+
+      const { checkoutUrl, checkoutId } = await createCheckoutSession({
+        productId: targetProductId,
+        customerEmail: userEmail,
+        successUrl,
+        metadata: {
+          userId: userId || '',
+          tier: tierFromProduct,
+        },
+      })
+
+      fastify.log.info(`Checkout session created: ${checkoutId} for tier ${tierFromProduct}`)
+
+      return reply.send({
+        checkoutUrl,
+        checkoutId,
+      })
     } catch (error: any) {
-      fastify.log.error(error)
+      fastify.log.error('Checkout error:', error)
       return reply.code(500).send({ error: error.message || 'Failed to create checkout session' })
     }
   })
 
-  // Stripe webhook handler
+  // Polar webhook handler
   fastify.post('/webhook', async (request, reply) => {
     try {
-      // SECURITY: Webhook signature verification should be implemented
-      // To implement:
-      // 1. Get webhook secret from STRIPE_WEBHOOK_SECRET env var
-      // 2. Get signature from request.headers['stripe-signature']
-      // 3. Use stripe.webhooks.constructEvent() to verify signature
-      // 4. Reject request if signature is invalid
       const payload = request.body as any
+      const webhookSecret = process.env.POLAR_WEBHOOK_SECRET
 
-      fastify.log.info('Stripe webhook received:', payload.type)
+      // TODO: Verify webhook signature when Polar provides the method
+      // For now, log all events
 
-      // Handle different webhook events
+      fastify.log.info(`Polar webhook received: ${payload.type}`)
+
+      const supabase = await getSupabaseClient()
+
       switch (payload.type) {
-        case 'checkout.session.completed':
-          fastify.log.info('Checkout session completed:', payload.data.object.id)
+        case 'checkout.created':
+        case 'checkout.updated':
+          fastify.log.info(`Checkout event: ${payload.data.id}`)
           break
-        case 'customer.subscription.updated':
-          fastify.log.info('Subscription updated:', payload.data.object.id)
+
+        case 'subscription.created':
+        case 'subscription.updated': {
+          const subscription = payload.data
+          const productId = subscription.product_id
+          const customerId = subscription.customer_id
+          const subscriptionId = subscription.id
+          const tier = getTierFromProductId(productId)
+          const status = subscription.status === 'active' ? 'active' :
+            subscription.status === 'past_due' ? 'past_due' :
+              subscription.status === 'canceled' ? 'cancelled' : 'active'
+
+          fastify.log.info(`Subscription ${payload.type}: ${subscriptionId}, tier: ${tier}`)
+
+          // Find user by Polar customer ID or email
+          // First, try to find by polar_customer_id
+          let { data: existingSub } = await supabase
+            .from('user_subscriptions')
+            .select('user_id')
+            .eq('polar_customer_id', customerId)
+            .single()
+
+          if (existingSub) {
+            // Update existing subscription
+            await supabase
+              .from('user_subscriptions')
+              .update({
+                tier: isAddOnProduct(productId) ? undefined : tier, // Don't change tier for add-ons
+                polar_subscription_id: subscriptionId,
+                polar_product_id: productId,
+                status,
+                current_period_start: subscription.current_period_start,
+                current_period_end: subscription.current_period_end,
+                cancel_at_period_end: subscription.cancel_at_period_end || false,
+                addon_visual_tests: isAddOnProduct(productId)
+                  ? getAddOnVisualTests(productId)
+                  : undefined,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('polar_customer_id', customerId)
+          } else {
+            // Try to match by email via checkout metadata
+            const metadata = subscription.metadata || {}
+            const userId = metadata.userId
+
+            if (userId) {
+              await supabase
+                .from('user_subscriptions')
+                .upsert({
+                  user_id: userId,
+                  tier: isAddOnProduct(productId) ? 'free' : tier,
+                  polar_customer_id: customerId,
+                  polar_subscription_id: subscriptionId,
+                  polar_product_id: productId,
+                  status,
+                  current_period_start: subscription.current_period_start,
+                  current_period_end: subscription.current_period_end,
+                  cancel_at_period_end: subscription.cancel_at_period_end || false,
+                  addon_visual_tests: isAddOnProduct(productId) ? getAddOnVisualTests(productId) : 0,
+                  updated_at: new Date().toISOString(),
+                }, { onConflict: 'user_id' })
+            }
+          }
           break
-        case 'customer.subscription.deleted':
-          fastify.log.info('Subscription deleted:', payload.data.object.id)
+        }
+
+        case 'subscription.canceled': {
+          const subscription = payload.data
+          const customerId = subscription.customer_id
+
+          fastify.log.info(`Subscription canceled: ${subscription.id}`)
+
+          await supabase
+            .from('user_subscriptions')
+            .update({
+              status: 'cancelled',
+              cancel_at_period_end: true,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('polar_customer_id', customerId)
           break
-        case 'invoice.payment_succeeded':
-          fastify.log.info('Invoice payment succeeded:', payload.data.object.id)
+        }
+
+        case 'subscription.revoked': {
+          const subscription = payload.data
+          const customerId = subscription.customer_id
+
+          fastify.log.info(`Subscription revoked: ${subscription.id}`)
+
+          // Downgrade to free tier
+          await supabase
+            .from('user_subscriptions')
+            .update({
+              tier: 'free',
+              status: 'expired',
+              polar_subscription_id: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('polar_customer_id', customerId)
           break
-        case 'invoice.payment_failed':
-          fastify.log.info('Invoice payment failed:', payload.data.object.id)
-          break
+        }
+
         default:
-          fastify.log.info('Unhandled webhook type:', payload.type)
+          fastify.log.info(`Unhandled Polar webhook: ${payload.type}`)
       }
 
       return reply.send({ received: true })
     } catch (error: any) {
-      fastify.log.error(error)
+      fastify.log.error('Webhook error:', error)
       return reply.code(500).send({ error: error.message || 'Webhook processing failed' })
     }
   })
-}
 
+  // Get available products/pricing
+  fastify.get('/products', async (request, reply) => {
+    return reply.send({
+      products: {
+        starter: POLAR_PRODUCTS.starter,
+        indie: POLAR_PRODUCTS.indie,
+        pro: POLAR_PRODUCTS.pro,
+        addon50: POLAR_PRODUCTS.addon50,
+        addon200: POLAR_PRODUCTS.addon200,
+      },
+    })
+  })
+
+  // Cancel subscription
+  fastify.post('/cancel', async (request, reply) => {
+    try {
+      const userId = (request as any).userId
+
+      if (!userId) {
+        return reply.code(401).send({ error: 'Unauthorized' })
+      }
+
+      const supabase = await getSupabaseClient()
+
+      // Mark as canceling at period end (don't immediately revoke)
+      const { error } = await supabase
+        .from('user_subscriptions')
+        .update({
+          cancel_at_period_end: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+
+      if (error) throw error
+
+      // Note: Actual cancellation should be done via Polar API
+      // The webhook will handle the final status update
+
+      return reply.send({ success: true, message: 'Subscription will be cancelled at period end' })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to cancel subscription' })
+    }
+  })
+}

@@ -106,6 +106,7 @@ export class RunLogger {
       domSnapshot: domUrl,
       success,
       error,
+      browser: browserType, // Direct browser field for parallel browser testing
       // Include comprehensive testing data if available
       consoleErrors: comprehensiveData?.consoleErrors?.map((e: any) => ({
         type: e.type,
@@ -186,14 +187,23 @@ export class RunLogger {
 
   /**
    * Save checkpoint after each step
+   * @param parentRunId Optional parent run ID for AI budget persistence
    */
   async saveCheckpoint(
     runId: string,
     stepNumber: number,
     steps: TestStep[],
-    artifacts: string[]
+    artifacts: string[],
+    parentRunId?: string
   ): Promise<void> {
     try {
+      // Persist AI budget snapshot to run metadata (for worker restart recovery)
+      let aiBudgetSnapshot = null
+      if (parentRunId) {
+        const { getBudgetSnapshot } = await import('../services/parentRunAIBudget')
+        aiBudgetSnapshot = getBudgetSnapshot(parentRunId)
+      }
+
       const fetch = (await import('node-fetch')).default
       await fetch(`${this.apiUrl}/api/tests/${runId}/checkpoint`, {
         method: 'POST',
@@ -202,6 +212,7 @@ export class RunLogger {
           stepNumber,
           steps,
           artifacts,
+          metadata: aiBudgetSnapshot ? { aiBudget: aiBudgetSnapshot } : undefined,
         }),
       })
     } catch (error: any) {

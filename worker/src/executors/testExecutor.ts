@@ -3,6 +3,8 @@ import { LLMAction, VisionContext, ActionExecutionResult, SelfHealingInfo } from
 import { PlaywrightRunner } from '../runners/playwright'
 import { AppiumRunner } from '../runners/appium'
 import { IntelligentRetryLayer } from '../services/intelligentRetryLayer'
+import { ActionContext, isIRLAllowed, isPageLevelFallbackAllowed } from '../types/actionContext'
+import { assertNoIRLDuringPreflight } from '../services/preflightInvariants'
 
 export interface ExecuteActionParams {
   sessionId: string
@@ -16,6 +18,7 @@ export interface ExecuteActionParams {
   runId: string
   browserType: 'chromium' | 'firefox' | 'webkit'
   stepNumber: number
+  actionContext?: ActionContext // CRITICAL: Enforces control-flow invariants
 }
 
 export interface ExecuteActionResult {
@@ -75,8 +78,15 @@ export class TestExecutor {
     let executionResult: ActionExecutionResult | void
     let healingMeta: SelfHealingInfo | undefined
 
+    // HARD INVARIANT: IRL/self-healing/fallback forbidden during preflight
+    assertNoIRLDuringPreflight(runId, 'TestExecutor.executeAction')
+
     // Use IRL for retry + self-healing if available and enabled
-    if (enableIRL && retryLayer && (action.action === 'click' || action.action === 'type' || action.action === 'assert')) {
+    // CRITICAL: IRL is FORBIDDEN in COOKIE_CONSENT context and during PREFLIGHT
+    const actionContext = params.actionContext || ActionContext.NORMAL
+    const irlAllowed = isIRLAllowed(actionContext)
+    
+    if (enableIRL && retryLayer && irlAllowed && (action.action === 'click' || action.action === 'type' || action.action === 'assert')) {
       const retryResult = await retryLayer.executeWithRetry(
         sessionId,
         action,
@@ -86,7 +96,8 @@ export class TestExecutor {
           maxRetries: 3,
           enableVisionMatching: true,
           enableAIAlternatives: true,
-        }
+        },
+        actionContext // Pass context to IRL
       )
 
       if (retryResult.success && retryResult.result) {
@@ -138,6 +149,12 @@ export class TestExecutor {
 
   /**
    * Dismiss overlays/popups before action execution
+   * 
+   * DEPRECATED: This method contained cookie bypass logic and has been removed.
+   * Cookie handling is now exclusively handled by CookieBannerHandler.
+   * Non-cookie popups are handled by NonCookiePopupHandler.
+   * 
+   * This method is kept for backward compatibility but always returns false.
    */
   async dismissOverlays(
     sessionId: string,
@@ -146,23 +163,9 @@ export class TestExecutor {
     browserType: 'chromium' | 'firefox' | 'webkit',
     stepNumber: number
   ): Promise<boolean> {
-    if (isMobile || !this.playwrightRunner) {
-      return false
-    }
-
-    try {
-      const sessionData = this.playwrightRunner.getSession(sessionId)
-      if (sessionData?.page) {
-        const hasOverlay = await this.playwrightRunner.checkAndDismissOverlays(sessionId)
-        if (hasOverlay) {
-          console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Dismissed blocking overlay before action`)
-          return true
-        }
-      }
-    } catch (overlayError: any) {
-      console.warn(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Overlay check failed:`, overlayError.message)
-    }
-
+    // Cookie handling bypass removed - always return false
+    // Cookie handling must go through CookieBannerHandler
+    // Non-cookie popups must go through NonCookiePopupHandler
     return false
   }
 
@@ -269,19 +272,10 @@ export class TestExecutor {
       }
     }
 
-    // Strategy 3: Check for and dismiss overlays that might be blocking
-    if (recentErrors >= 4 && !isMobile && this.playwrightRunner) {
-      try {
-        const dismissed = await this.dismissOverlays(sessionId, isMobile, runId, browserType, 0)
-        if (dismissed) {
-          console.log(`[${runId}] [${browserType.toUpperCase()}] Recovery: Dismissed blocking overlay`)
-          await new Promise(resolve => setTimeout(resolve, 500))
-          return true
-        }
-      } catch (overlayError: any) {
-        console.warn(`[${runId}] [${browserType.toUpperCase()}] Recovery overlay check failed:`, overlayError.message)
-      }
-    }
+    // Strategy 3: Cookie handling bypass removed
+    // Recovery no longer attempts to dismiss overlays
+    // Cookie handling must go through CookieBannerHandler
+    // Non-cookie popups must go through NonCookiePopupHandler
 
     // Strategy 4: Try navigating back or refreshing
     if (recentErrors >= 5) {

@@ -48,6 +48,7 @@ import { fixPromptRoutes } from './routes/fixPrompts'
 import { TestControlWebSocket } from './lib/websocket'
 import { RedisWebSocketManager } from './lib/websocketRedis'
 import { startCleanupScheduler } from './jobs/cleanupArtifacts'
+import { startTestRunCleanupScheduler } from './jobs/cleanupTestRuns'
 
 const fastify = Fastify({
   logger: true,
@@ -234,6 +235,7 @@ async function start() {
     // Start artifact cleanup scheduler
     if (process.env.ENABLE_ARTIFACT_CLEANUP !== 'false') {
       startCleanupScheduler()
+      startTestRunCleanupScheduler()
       fastify.log.info('✅ Artifact cleanup scheduler started')
     } else {
       fastify.log.info('Artifact cleanup scheduler disabled (set ENABLE_ARTIFACT_CLEANUP=true to enable)')

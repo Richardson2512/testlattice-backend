@@ -124,6 +124,9 @@ function getGuestQueue(): Queue<JobData> {
 /**
  * Enqueue a registered user test run
  * Uses 'test-runner' queue → processed by main TestProcessor
+ * 
+ * If browserMatrix is provided, creates separate jobs for each browser.
+ * Parallelism is controlled by queue concurrency settings.
  */
 export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?: boolean }) {
   try {
@@ -133,15 +136,48 @@ export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?:
     // Verify Redis connection before adding job
     await connection.ping()
 
-    const jobId = opts?.allowDuplicate ? undefined : `test-${jobData.runId}`
+    // Handle parallel browser testing
+    const browserMatrix = jobData.options?.browserMatrix
+    const parentRunId = jobData.runId
 
-    const job = await queue.add('test-run', jobData, {
+    if (browserMatrix && browserMatrix.length > 1) {
+      // Create separate jobs for each browser in the matrix
+      const jobs = []
+      for (const browserType of browserMatrix) {
+        const browserJobData: JobData = {
+          ...jobData,
+          browserType,
+          parentRunId,
+          // Create unique runId for each browser job
+          runId: `${parentRunId}-${browserType}`,
+        }
+
+        const jobId = opts?.allowDuplicate ? undefined : `test-${browserJobData.runId}`
+        const job = await queue.add('test-run', browserJobData, {
+          priority: 1,
+          jobId,
+        })
+        jobs.push(job)
+        console.log(`✅ Browser job ${browserJobData.runId} (${browserType}) enqueued to test-runner (Job ID: ${job.id})`)
+      }
+      return jobs[0] // Return first job for compatibility
+    } else {
+      // Single browser job (default or single browser in matrix)
+      const browserType = browserMatrix?.[0] || 'chromium'
+      const singleJobData: JobData = {
+        ...jobData,
+        browserType: browserMatrix ? browserType : undefined, // Only set if explicitly in matrix
+      }
+
+      const jobId = opts?.allowDuplicate ? undefined : `test-${singleJobData.runId}`
+      const job = await queue.add('test-run', singleJobData, {
       priority: 1,
       jobId,
     })
 
-    console.log(`✅ Test run ${jobData.runId} enqueued to test-runner (Job ID: ${job.id})`)
+      console.log(`✅ Test run ${singleJobData.runId} enqueued to test-runner (Job ID: ${job.id})`)
     return job
+    }
   } catch (error: any) {
     console.error('❌ Failed to enqueue test run:', error.message)
     console.error('💡 Please check:')
