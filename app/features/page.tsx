@@ -110,7 +110,7 @@ export default function FeaturesPage() {
             </section>
 
             {/* 2. Intelligence Engine */}
-            <section style={{ padding: '4rem 0' }}>
+            <section id="functional" style={{ padding: '4rem 0' }}>
                 <div className="container">
                     <div className="glass-panel" style={{ padding: '0', overflow: 'hidden' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
@@ -143,7 +143,7 @@ export default function FeaturesPage() {
             </section>
 
             {/* 3. Deep Insights (Reports) */}
-            <section style={{ padding: '4rem 0' }}>
+            <section id="visual" style={{ padding: '4rem 0' }}>
                 <div className="container">
                     <div className="glass-panel" style={{ padding: '0', overflow: 'hidden' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', alignItems: 'center', direction: 'rtl' }}>
