@@ -1,4 +1,4 @@
-# TestLattice Worker
+# Rihario Worker
 
 Worker service that processes test jobs from the queue.
 
@@ -48,4 +48,3 @@ worker/
 - `npm run build` - Build TypeScript
 - `npm start` - Run production build
 - `npm run lint` - Run ESLint
-

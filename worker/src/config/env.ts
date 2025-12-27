@@ -62,7 +62,7 @@ export const config = {
 
   pinecone: {
     apiKey: optionalEnv('PINECONE_API_KEY', ''),
-    indexName: optionalEnv('PINECONE_INDEX_NAME', 'testlattice'),
+    indexName: optionalEnv('PINECONE_INDEX_NAME', 'Rihario'),
   },
 
   testRunners: {
@@ -98,7 +98,7 @@ export const config = {
 
   notifications: {
     slackWebhook: optionalEnv('SLACK_WEBHOOK_URL', ''),
-    frontendBaseUrl: optionalEnv('FRONTEND_URL', 'http://localhost:3000'),
+    frontendBaseUrl: optionalEnv('FRONTEND_URL', 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app'),
   },
 
   vision: {
@@ -114,7 +114,7 @@ export const config = {
 
   heuristics: {
     loginUsername: optionalEnv('TEST_USERNAME', '') || optionalEnv('TEST_EMAIL', 'demo@example.com'),
-    loginPassword: optionalEnv('TEST_PASSWORD', 'TestLattice!123'),
+    loginPassword: optionalEnv('TEST_PASSWORD', 'Rihario!123'),
   },
 
   // WebRTC/LiveKit streaming (optional)

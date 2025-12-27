@@ -1,8 +1,8 @@
 /**
- * Tier System - Defines feature restrictions for Guest, Starter, and Indie tiers
+ * Tier System - Defines feature restrictions for Free, Starter, Indie, and Pro tiers
  */
 
-export type UserTier = 'guest' | 'starter' | 'indie' | 'pro' | 'agency'
+export type UserTier = 'guest' | 'free' | 'starter' | 'indie' | 'pro' | 'agency'
 
 export interface TierLimits {
   // Test execution limits
@@ -69,6 +69,33 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
       visualRegression: false,
     },
     retentionDays: 2, // 48h
+  },
+  // Free tier - for registered users with no paid subscription
+  // Matches pricing page: 3 tests/month, 1 visual test, Chrome only
+  free: {
+    maxSteps: 25,
+    maxPages: 1,
+    maxScreenshots: Infinity,
+    maxDuration: 5,
+    browsers: ['chromium'],
+    mobileBrowsers: false,
+    maxParallelBrowsers: 1,
+    diagnosis: {
+      enabled: false,
+    },
+    godMode: false,
+    videoRecording: false,
+    traceRecording: false,
+    selfHealingRetries: 1,
+    testSuggestions: 0,
+    comprehensiveTesting: {
+      performance: false,
+      accessibility: false,
+      security: false,
+      seo: false,
+      visualRegression: false,
+    },
+    retentionDays: 0, // No history for free tier
   },
   starter: {
     maxSteps: Infinity, // Changed from 25 to Infinity (dynamic based on diagnosis)
@@ -278,22 +305,40 @@ export function validateTierLimits(
 }
 
 /**
- * Get user tier from user metadata or default to guest
+ * Get user tier from user_subscriptions table
  */
 export async function getUserTier(userId?: string): Promise<UserTier> {
   if (!userId) {
     return 'guest'
   }
 
-  // TODO: Fetch from database user metadata or subscription service
-  // For now, default to 'starter' for authenticated users
-  // This should be replaced with actual subscription lookup
   try {
-    // const user = await Database.getUser(userId)
-    // return user?.tier || 'starter'
-    return 'starter' // Default for now
-  } catch {
-    return 'starter'
+    // Import supabase here to avoid circular dependencies
+    const { supabase } = await import('./supabase')
+
+    const { data, error } = await supabase
+      .from('user_subscriptions')
+      .select('tier')
+      .eq('user_id', userId)
+      .single()
+
+    if (error || !data) {
+      console.warn(`Failed to fetch tier for user ${userId}:`, error?.message)
+      return 'free' as UserTier // Default to free if not found
+    }
+
+    // Map database tier to UserTier
+    const tierMap: Record<string, UserTier> = {
+      'free': 'guest', // Free tier maps to guest limits
+      'starter': 'starter',
+      'indie': 'indie',
+      'pro': 'pro',
+    }
+
+    return tierMap[data.tier] || 'guest'
+  } catch (err) {
+    console.error('Error fetching user tier:', err)
+    return 'guest'
   }
 }
 

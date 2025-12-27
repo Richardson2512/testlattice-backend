@@ -423,7 +423,7 @@ export class TestProcessor {
       try {
         const { config } = await import('../config/env')
         if (config.notifications.slackWebhook) {
-          const frontendUrl = config.notifications.frontendBaseUrl || 'http://localhost:3000'
+          const frontendUrl = config.notifications.frontendBaseUrl || 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app'
           const testRunUrl = `${frontendUrl}/test/report/${params.runId}`
 
           // Slack Block Kit format for rich cards
@@ -1707,7 +1707,7 @@ export class TestProcessor {
       }
 
       const fetch = (await import('node-fetch')).default
-      const frontendUrl = config.notifications?.frontendBaseUrl || 'http://localhost:3000'
+      const frontendUrl = config.notifications?.frontendBaseUrl || 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app'
       const blockers = diagnosis.nonTestableComponents?.length || 0
       const pageHighlights = diagnosis.pages && diagnosis.pages.length > 0
         ? `Views checked: ${diagnosis.pages

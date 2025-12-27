@@ -1,4 +1,4 @@
-// Shared types for the TestLattice platform
+// Shared types for the Rihario platform
 
 export enum BuildType {
   WEB = 'web',

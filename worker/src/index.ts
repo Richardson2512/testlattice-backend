@@ -163,7 +163,7 @@ export { wasabiStorage, traceService }
 let pineconeService: PineconeService | null = null
 function getPineconeService(): PineconeService | null {
   const apiKey = process.env.PINECONE_API_KEY || config.pinecone.apiKey
-  const indexName = process.env.PINECONE_INDEX_NAME || config.pinecone.indexName || 'testlattice'
+  const indexName = process.env.PINECONE_INDEX_NAME || config.pinecone.indexName || 'Rihario'
 
   if (!pineconeService && apiKey) {
     try {

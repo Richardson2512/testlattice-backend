@@ -1,5 +1,5 @@
 {
-  "name": "testlattice-worker",
+  "name": "Rihario-worker",
   "version": "1.0.0",
   "description": "Worker service for processing test jobs",
   "main": "dist/index.js",

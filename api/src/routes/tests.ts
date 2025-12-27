@@ -197,8 +197,10 @@ export async function testRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: { projectId?: string; limit?: number } }>('/', async (request: any, reply: any) => {
     try {
       const { projectId, limit } = request.query
+      const userId = request.userId // Set by auth middleware
 
-      const testRuns = await Database.listTestRuns(projectId, limit ? parseInt(limit.toString()) : 50)
+      // Pass userId to filter test runs to only show user's own tests
+      const testRuns = await Database.listTestRuns(projectId, limit ? parseInt(limit.toString()) : 50, userId)
 
       return reply.send({ testRuns })
     } catch (error: any) {

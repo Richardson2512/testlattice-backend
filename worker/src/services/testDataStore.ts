@@ -101,7 +101,7 @@ export class TestDataStore {
     
     const timestamp = Date.now()
     const bundle: UserBundle = {
-      email: `user${index}_${timestamp}@testlattice.com`,
+      email: `user${index}_${timestamp}@Rihario.com`,
       name: `User ${index}`,
       username: `user_${index}_${timestamp}`,
       password: 'SecurePass123!',

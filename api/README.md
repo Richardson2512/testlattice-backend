@@ -1,6 +1,6 @@
-# TestLattice API
+# Rihario API
 
-Fastify-based API server for the TestLattice platform.
+Fastify-based API server for the Rihario platform.
 
 ## Getting Started
 

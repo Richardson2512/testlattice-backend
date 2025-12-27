@@ -236,7 +236,7 @@ export class VerificationService {
     const dataGenerators: Record<string, () => string> = {
       email: () => {
         const timestamp = Date.now()
-        return `test${timestamp}@testlattice.com`
+        return `test${timestamp}@Rihario.com`
       },
       password: () => 'SecurePass123!',
       text: () => element.placeholder || 'Test Input',
@@ -338,11 +338,11 @@ export class VerificationService {
         if (testDataStore) {
           return testDataStore.generateOrRetrieve(key, () => {
             const timestamp = Date.now()
-            return `test${timestamp}@testlattice.com`
+            return `test${timestamp}@Rihario.com`
           })
         }
         const timestamp = Date.now()
-        return `test${timestamp}@testlattice.com`
+        return `test${timestamp}@Rihario.com`
       }},
       { pattern: /@fake\s+password|use\s+@fake\s+password/i, type: 'password', generator: () => {
         const key = 'password'
@@ -404,7 +404,7 @@ export class VerificationService {
     const generators: Record<string, (idx: number) => string> = {
       email: (idx) => {
         const timestamp = Date.now()
-        return `user${idx}_${timestamp}@testlattice.com`
+        return `user${idx}_${timestamp}@Rihario.com`
       },
       password: () => 'SecurePass123!',
       name: (idx) => `User ${idx}`,

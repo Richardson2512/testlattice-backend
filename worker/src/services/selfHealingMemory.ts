@@ -38,11 +38,11 @@ export class SelfHealingMemoryService {
     try {
       const { data, error } = await this.supabase
         .from('selector_healing_memory')
-        .select('healedSelector, successCount')
-        .eq('projectId', projectId)
-        .eq('pageSignature', pageSignature)
-        .eq('originalSelector', originalSelector)
-        .order('successCount', { ascending: false })
+        .select('healed_selector, success_count')
+        .eq('project_id', projectId)
+        .eq('page_signature', pageSignature)
+        .eq('original_selector', originalSelector)
+        .order('success_count', { ascending: false })
         .limit(1)
         .single()
 
@@ -51,8 +51,8 @@ export class SelfHealingMemoryService {
       }
 
       // Only return if it has been successful at least once
-      if (data.successCount > 0) {
-        return data.healedSelector
+      if (data.success_count > 0) {
+        return data.healed_selector
       }
 
       return null
@@ -75,11 +75,11 @@ export class SelfHealingMemoryService {
       // Check if memory already exists
       const { data: existing } = await this.supabase
         .from('selector_healing_memory')
-        .select('id, successCount')
-        .eq('projectId', projectId)
-        .eq('pageSignature', pageSignature)
-        .eq('originalSelector', originalSelector)
-        .eq('healedSelector', healedSelector)
+        .select('id, success_count')
+        .eq('project_id', projectId)
+        .eq('page_signature', pageSignature)
+        .eq('original_selector', originalSelector)
+        .eq('healed_selector', healedSelector)
         .single()
 
       if (existing) {
@@ -87,8 +87,8 @@ export class SelfHealingMemoryService {
         await this.supabase
           .from('selector_healing_memory')
           .update({
-            successCount: existing.successCount + 1,
-            lastUsedAt: new Date().toISOString(),
+            success_count: existing.success_count + 1,
+            last_used_at: new Date().toISOString(),
           })
           .eq('id', existing.id)
       } else {
@@ -96,13 +96,13 @@ export class SelfHealingMemoryService {
         await this.supabase
           .from('selector_healing_memory')
           .insert({
-            projectId,
-            pageSignature,
-            originalSelector,
-            healedSelector,
-            successCount: 1,
-            lastUsedAt: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
+            project_id: projectId,
+            page_signature: pageSignature,
+            original_selector: originalSelector,
+            healed_selector: healedSelector,
+            success_count: 1,
+            last_used_at: new Date().toISOString(),
+            created_at: new Date().toISOString(),
           })
       }
     } catch (error: any) {
@@ -110,6 +110,7 @@ export class SelfHealingMemoryService {
       console.warn(`[SelfHealingMemory] Failed to save healing memory:`, error.message)
     }
   }
+
 
   /**
    * Generate page signature (URL + DOM hash)

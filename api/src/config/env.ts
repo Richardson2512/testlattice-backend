@@ -42,34 +42,34 @@ export const config = {
   port: parseInt(optionalEnv('PORT', '3001'), 10),
   host: optionalEnv('HOST', '0.0.0.0'),
   nodeEnv: optionalEnv('NODE_ENV', 'development'),
-  
+
   supabase: {
     url: requireEnv('SUPABASE_URL', 'Supabase project URL'),
     key: requireEnv('SUPABASE_KEY', 'Supabase anon/public key'),
     serviceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY', 'Supabase service role key for admin operations'),
   },
-  
+
   redis: {
     // Optional: Falls back to local Redis for development
     url: optionalEnv('REDIS_URL', 'redis://localhost:6379'),
   },
-  
+
   // Optional AI/ML services (features degrade gracefully if missing)
   pinecone: {
     apiKey: optionalEnv('PINECONE_API_KEY', ''),
-    indexName: optionalEnv('PINECONE_INDEX_NAME', 'testlattice'),
+    indexName: optionalEnv('PINECONE_INDEX_NAME', 'Rihario'),
     host: optionalEnv('PINECONE_HOST', ''),
     region: optionalEnv('PINECONE_REGION', 'us-east-1'),
   },
-  
+
   // Optional monitoring (graceful degradation)
   sentry: {
     dsn: optionalEnv('SENTRY_DSN', ''),
   },
-  
-  appUrl: optionalEnv('APP_URL', 'http://localhost:3000'),
+
+  appUrl: optionalEnv('APP_URL', 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app'),
   apiUrl: optionalEnv('API_URL', `http://${process.env.HOST || 'localhost'}:${parseInt(process.env.PORT || '3001', 10)}`),
-  
+
   // OpenRouter for fix prompt generation
   openRouter: {
     apiKey: optionalEnv('OPENROUTER_API_KEY', ''),

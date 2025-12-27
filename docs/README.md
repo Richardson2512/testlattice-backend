@@ -1,7 +1,7 @@
 <<<<<<< HEAD
-# TestLattice Backend
+# Rihario Backend
 
-Backend services for the TestLattice AI-powered testing platform, including the API server and Worker service.
+Backend services for the Rihario AI-powered testing platform, including the API server and Worker service.
 
 ## Architecture
 
@@ -44,8 +44,8 @@ This repository contains two main backend services:
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/Richardson2512/testlattice-backend.git
-cd testlattice-backend
+git clone https://github.com/Richardson2512/Rihario-backend.git
+cd Rihario-backend
 ```
 
 2. Install dependencies for both services:
@@ -144,7 +144,7 @@ npm run dev
 ## Project Structure
 
 ```
-testlattice-backend/
+Rihario-backend/
 ├── api/                    # API Server
 │   ├── src/
 │   │   ├── config/         # Configuration
@@ -258,4 +258,4 @@ The database schema is defined in `api/supabase-schema.sql`. Key tables:
 
 ## License
 
-This project is part of the TestLattice platform.
+This project is part of the Rihario platform.

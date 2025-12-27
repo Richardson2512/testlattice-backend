@@ -16,7 +16,7 @@ import { HeuristicRecord, SemanticAnchors, GodModeInteraction } from '../types'
 export class LearningService {
   private apiUrl: string
 
-  constructor(apiUrl: string = process.env.API_URL || 'http://localhost:3000') {
+  constructor(apiUrl: string = process.env.API_URL || 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app') {
     this.apiUrl = apiUrl
   }
 

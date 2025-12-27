@@ -45,10 +45,12 @@ import { projectRoutes } from './routes/projects'
 import { integrationRoutes } from './routes/integrations'
 import { billingRoutes } from './routes/billing'
 import { fixPromptRoutes } from './routes/fixPrompts'
+import { adminRoutes } from './routes/admin'
 import { TestControlWebSocket } from './lib/websocket'
 import { RedisWebSocketManager } from './lib/websocketRedis'
 import { startCleanupScheduler } from './jobs/cleanupArtifacts'
 import { startTestRunCleanupScheduler } from './jobs/cleanupTestRuns'
+import { startScheduledJobs } from './jobs/scheduler'
 
 const fastify = Fastify({
   logger: true,
@@ -60,7 +62,7 @@ async function registerPlugins() {
   const allowedOrigins: string[] = []
 
   // Add APP_URL if configured
-  if (config.appUrl && config.appUrl !== 'http://localhost:3000') {
+  if (config.appUrl && config.appUrl !== 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app') {
     allowedOrigins.push(config.appUrl)
   }
 
@@ -72,11 +74,14 @@ async function registerPlugins() {
 
   // In development, allow localhost origins
   if (config.nodeEnv === 'development') {
-    allowedOrigins.push('http://localhost:3000', 'http://127.0.0.1:3000')
+    allowedOrigins.push('http://127.0.0.1:3000')
   }
 
+  // Always allow the production Vercel frontend
+  allowedOrigins.push('https://Rihario-7ip77vn43-pricewises-projects.vercel.app')
+
   // Fallback to allow all if no origins configured (development only)
-  const corsOrigins = allowedOrigins.length > 0 ? allowedOrigins : (config.nodeEnv === 'development' ? ['http://localhost:3000', 'http://127.0.0.1:3000'] : [config.appUrl || '*'])
+  const corsOrigins = allowedOrigins.length > 0 ? allowedOrigins : (config.nodeEnv === 'development' ? ['http://127.0.0.1:3000'] : [config.appUrl || '*'])
 
   await fastify.register(cors, {
     origin: corsOrigins,
@@ -91,7 +96,7 @@ async function registerPlugins() {
   })
 
   await fastify.register(cookie, {
-    secret: process.env.COOKIE_SECRET || 'testlattice-cookie-secret-key-change-in-prod', // for cookies signature
+    secret: process.env.COOKIE_SECRET || 'Rihario-cookie-secret-key-change-in-prod', // for cookies signature
     parseOptions: {}  // options for parsing cookies
   })
 }
@@ -168,6 +173,9 @@ async function registerRoutes() {
 
     // Fix prompt routes
     await fastify.register(fixPromptRoutes, { prefix: '' })
+
+    // Admin routes (requires admin auth)
+    await fastify.register(adminRoutes, { prefix: '/api/admin' })
   }, { prefix: '' })
 
   // Set up Sentry error handler (must be after all routes)
@@ -240,11 +248,15 @@ async function start() {
     } else {
       fastify.log.info('Artifact cleanup scheduler disabled (set ENABLE_ARTIFACT_CLEANUP=true to enable)')
     }
+
+    // Start billing/usage scheduled jobs
+    startScheduledJobs()
+    fastify.log.info('✅ Usage reset scheduler started')
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)
   }
 }
 
-start()
+
 

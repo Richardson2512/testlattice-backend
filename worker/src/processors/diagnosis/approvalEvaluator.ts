@@ -5,7 +5,7 @@ export function resolveTestEnvironment(options?: JobData['options']): TestEnviro
   if (options?.environment) {
     return options.environment
   }
-  const envFromProcess = (process.env.TEST_ENVIRONMENT || process.env.TESTLATTICE_ENVIRONMENT || '').toLowerCase()
+  const envFromProcess = (process.env.TEST_ENVIRONMENT || process.env.Rihario_ENVIRONMENT || '').toLowerCase()
   if (envFromProcess === 'development' || envFromProcess === 'staging' || envFromProcess === 'production') {
     return envFromProcess as TestEnvironment
   }

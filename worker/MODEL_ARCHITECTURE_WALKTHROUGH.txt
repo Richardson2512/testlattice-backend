@@ -442,8 +442,8 @@ PRODUCTION HARDENING FEATURES (FINAL PASS)
    -------------
    Files Created:
    - worker/MODEL_LIMITS_AND_GUARANTEES.md: Technical documentation
-   - testlattice-main/content/docs/model-limits-and-guarantees.tsx: User-facing docs
-   - testlattice-main/app/docs/model-limits-and-guarantees/page.tsx: Documentation page
+   - Rihario-main/content/docs/model-limits-and-guarantees.tsx: User-facing docs
+   - Rihario-main/app/docs/model-limits-and-guarantees/page.tsx: Documentation page
    
    Content:
    - One-model-per-test rule explanation
@@ -532,4 +532,3 @@ while adding production hardening. Zero behavior regression.
 ================================================================================
 END OF WALKTHROUGH
 ================================================================================
-

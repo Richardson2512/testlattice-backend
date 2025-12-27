@@ -32,7 +32,7 @@ Start-Sleep -Seconds 2
 
 # Start Frontend
 Write-Host "🎨 Starting Frontend (port 3000)..." -ForegroundColor Cyan
-$frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot/../testlattice-main'; Write-Host 'Frontend (Next.js)' -ForegroundColor Cyan; npm run dev" -PassThru
+$frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot/../Rihario-main'; Write-Host 'Frontend (Next.js)' -ForegroundColor Cyan; npm run dev" -PassThru
 Start-Sleep -Seconds 5
 
 # Open browser
@@ -55,4 +55,3 @@ Write-Host "Three terminal windows have been opened for each service." -Foregrou
 Write-Host "Close them to stop the services." -ForegroundColor White
 Write-Host ""
 Write-Host "Press Ctrl+C to exit this script (services will continue running)" -ForegroundColor Yellow
-

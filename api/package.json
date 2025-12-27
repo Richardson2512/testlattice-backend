@@ -1,7 +1,7 @@
 {
-  "name": "testlattice-api",
+  "name": "Rihario-api",
   "version": "1.0.0",
-  "description": "API server for TestLattice platform",
+  "description": "API server for Rihario platform",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

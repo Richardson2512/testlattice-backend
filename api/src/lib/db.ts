@@ -98,7 +98,7 @@ export class Database {
     return data ? this.mapTestRunFromDb(data) : null
   }
 
-  static async listTestRuns(projectId?: string, limit = 50): Promise<TestRun[]> {
+  static async listTestRuns(projectId?: string, limit = 50, userId?: string): Promise<TestRun[]> {
     let query = supabase
       .from('test_runs')
       .select('*')
@@ -107,6 +107,11 @@ export class Database {
 
     if (projectId) {
       query = query.eq('project_id', projectId)
+    }
+
+    // Filter by user_id if provided - only show user's own tests
+    if (userId) {
+      query = query.eq('user_id', userId)
     }
 
     const { data, error } = await query
