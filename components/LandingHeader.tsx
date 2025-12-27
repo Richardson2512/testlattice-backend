@@ -10,6 +10,7 @@ export function LandingHeader() {
   const [user, setUser] = useState<User | null>(null)
   const [mounted, setMounted] = useState(false)
   const [scrolled, setScrolled] = useState(false)
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null)
   const supabase = createClient()
 
   useEffect(() => {
@@ -75,7 +76,12 @@ export function LandingHeader() {
         <div style={{ display: 'flex', gap: '2rem', alignItems: 'center' }} className="desktop-nav">
 
           {/* Features Dropdown */}
-          <div className="nav-dropdown-trigger" style={{ position: 'relative', cursor: 'pointer' }}>
+          <div
+            className="nav-dropdown-trigger"
+            style={{ position: 'relative', cursor: 'pointer', padding: '10px 0' }}
+            onMouseEnter={() => setActiveDropdown('features')}
+            onMouseLeave={() => setActiveDropdown(null)}
+          >
             <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
               Features <span style={{ fontSize: '0.7rem' }}>▼</span>
             </span>
@@ -90,11 +96,8 @@ export function LandingHeader() {
               padding: '0.5rem',
               minWidth: '220px',
               boxShadow: 'var(--shadow-glass)',
-              opacity: 0,
-              visibility: 'hidden',
-              transform: 'translateY(10px)',
-              transition: 'all 0.2s ease',
-              zIndex: 50
+              display: activeDropdown === 'features' ? 'block' : 'none',
+              zIndex: 100
             }}>
               {NAV_ITEMS.features.map((item) => (
                 <Link
@@ -122,7 +125,12 @@ export function LandingHeader() {
           </div>
 
           {/* Resources Dropdown */}
-          <div className="nav-dropdown-trigger" style={{ position: 'relative', cursor: 'pointer' }}>
+          <div
+            className="nav-dropdown-trigger"
+            style={{ position: 'relative', cursor: 'pointer', padding: '10px 0' }}
+            onMouseEnter={() => setActiveDropdown('resources')}
+            onMouseLeave={() => setActiveDropdown(null)}
+          >
             <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
               Resources <span style={{ fontSize: '0.7rem' }}>▼</span>
             </span>
@@ -137,11 +145,8 @@ export function LandingHeader() {
               padding: '0.5rem',
               minWidth: '180px',
               boxShadow: 'var(--shadow-glass)',
-              opacity: 0,
-              visibility: 'hidden',
-              transform: 'translateY(10px)',
-              transition: 'all 0.2s ease',
-              zIndex: 50
+              display: activeDropdown === 'resources' ? 'block' : 'none',
+              zIndex: 100
             }}>
               {NAV_ITEMS.resources.map((item) => (
                 <Link key={item.name} href={item.href} className="dropdown-item" style={{ display: 'block', padding: '0.5rem 0.75rem', borderRadius: '6px', color: 'var(--text-primary)', textDecoration: 'none' }}>{item.name}</Link>
@@ -174,12 +179,6 @@ export function LandingHeader() {
         </div>
       </nav>
       <style jsx>{`
-        .nav-dropdown-trigger:hover .nav-dropdown-content {
-            display: block !important;
-            opacity: 1 !important;
-            transform: translateY(0) !important;
-            pointer-events: auto !important;
-        }
         .dropdown-item:hover {
             background: var(--bg-tertiary);
         }
