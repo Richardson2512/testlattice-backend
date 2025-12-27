@@ -10,96 +10,131 @@ export const metadata = {
 
 export default function BehaviorAnalysisDocsPage() {
     return (
-        <div className="min-h-screen bg-[var(--bg-primary)] font-sans text-[var(--text-primary)]">
+        <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)' }}>
             <LandingHeader />
 
-            <main className="container max-w-4xl mx-auto px-6 pt-32 pb-24">
+            <main className="container" style={{ maxWidth: '900px', margin: '0 auto', padding: '8rem 1.5rem 6rem' }}>
                 {/* Breadcrumb */}
-                <div className="flex items-center gap-2 text-sm text-[var(--text-muted)] mb-8">
-                    <Link href="/docs" className="hover:text-[var(--primary)] transition-colors">Docs</Link>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '2rem' }}>
+                    <Link href="/docs" style={{ color: 'inherit', textDecoration: 'none', transition: 'color 0.2s' }} onMouseOver={e => e.currentTarget.style.color = 'var(--primary)'} onMouseOut={e => e.currentTarget.style.color = 'inherit'}>Docs</Link>
                     <span>/</span>
-                    <span className="text-[var(--text-secondary)]">Behavior Analysis</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>Behavior Analysis</span>
                 </div>
 
-                <article className="prose prose-lg max-w-none">
-                    <h1 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-[var(--maroon-900)] to-[var(--maroon-700)] mb-6">
+                <article>
+                    <h1 style={{
+                        fontSize: 'clamp(2.5rem, 5vw, 3.5rem)',
+                        fontWeight: 700,
+                        marginBottom: '1.5rem',
+                        lineHeight: 1.1,
+                        background: 'linear-gradient(90deg, var(--maroon-900), var(--maroon-700))',
+                        WebkitBackgroundClip: 'text',
+                        WebkitTextFillColor: 'transparent'
+                    }}>
                         Behavior Analysis Testing
                     </h1>
 
-                    <p className="text-xl text-[var(--text-secondary)] leading-relaxed mb-12">
+                    <p style={{ fontSize: '1.25rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '3rem' }}>
                         Go beyond functional correctness. The <strong>Rihario Intelligence Engine</strong> strictly evaluates the "soul" of your AI—testing for safety, compliance, and persona adherence under pressure.
                     </p>
 
-                    <div className="grid md:grid-cols-2 gap-8 mb-16">
-                        <div className="glass-card p-6">
-                            <h3 className="text-xl font-semibold mb-3 text-[var(--primary)]">Safety & Compliance</h3>
-                            <p className="text-[var(--text-secondary)]">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem', marginBottom: '4rem' }}>
+                        <div className="glass-card" style={{ padding: '1.5rem' }}>
+                            <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--primary)' }}>Safety & Compliance</h3>
+                            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                                 Ensure your agent never leaks PII, gives medical advice, or violates regulatory standards, even when "jailbroken" by malicious users.
                             </p>
                         </div>
-                        <div className="glass-card p-6">
-                            <h3 className="text-xl font-semibold mb-3 text-[var(--primary)]">Persona Adherence</h3>
-                            <p className="text-[var(--text-secondary)]">
+                        <div className="glass-card" style={{ padding: '1.5rem' }}>
+                            <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--primary)' }}>Persona Adherence</h3>
+                            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                                 Verify that your sales bot stays professional, your support agent remains empathetic, and your brand voice never breaks character.
                             </p>
                         </div>
                     </div>
 
-                    <h2 className="text-3xl font-bold mt-16 mb-6 text-[var(--text-primary)]">The Architecture of Autonomous Red-Teaming</h2>
-                    <p className="text-[var(--text-secondary)] mb-6">
+                    <h2 style={{ fontSize: '2rem', fontWeight: 700, marginTop: '4rem', marginBottom: '1.5rem', color: 'var(--text-primary)' }}>The Architecture of Autonomous Red-Teaming</h2>
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: 1.6 }}>
                         Rihario uses a scaffolded multi-model approach to "stress test" your AI. Instead of static prompts, we use dynamic agents to simulate diverse, adversarial user interactions.
                     </p>
 
-                    <div className="space-y-8 my-12">
-                        <div className="flex gap-6 items-start">
-                            <div className="w-12 h-12 rounded-full bg-[var(--beige-200)] flex items-center justify-center text-xl font-bold text-[var(--maroon-900)] shrink-0">1</div>
-                            <div>
-                                <h3 className="text-xl font-bold mb-2">The Architect</h3>
-                                <p className="text-[var(--text-secondary)]">
-                                    Analyzes your defined "Target Behavior" (e.g., "Must not become sycophantic") and scientifically generates test heuristics.
-                                </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', margin: '3rem 0' }}>
+                        {[
+                            {
+                                num: 1,
+                                title: "The Architect",
+                                desc: 'Analyzes your defined "Target Behavior" (e.g., "Must not become sycophantic") and scientifically generates test heuristics.'
+                            },
+                            {
+                                num: 2,
+                                title: "The Actor (Red Team)",
+                                desc: 'Simulates thousands of conversation turns, trying different strategies (emotional manipulation, logical traps) to trigger a failure.'
+                            },
+                            {
+                                num: 3,
+                                title: "The Judge",
+                                desc: 'Reads the full transcript and provides a high-fidelity score with cited evidence, eliminating human bias from the evaluation.'
+                            }
+                        ].map((step, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
+                                <div style={{
+                                    width: '3rem',
+                                    height: '3rem',
+                                    borderRadius: '50%',
+                                    background: 'var(--beige-200)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '1.25rem',
+                                    fontWeight: 700,
+                                    color: 'var(--maroon-900)',
+                                    flexShrink: 0
+                                }}>{step.num}</div>
+                                <div>
+                                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem' }}>{step.title}</h3>
+                                    <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                                        {step.desc}
+                                    </p>
+                                </div>
                             </div>
-                        </div>
-                        <div className="flex gap-6 items-start">
-                            <div className="w-12 h-12 rounded-full bg-[var(--beige-200)] flex items-center justify-center text-xl font-bold text-[var(--maroon-900)] shrink-0">2</div>
-                            <div>
-                                <h3 className="text-xl font-bold mb-2">The Actor (Red Team)</h3>
-                                <p className="text-[var(--text-secondary)]">
-                                    Simulates thousands of conversation turns, trying different strategies (emotional manipulation, logical traps) to trigger a failure.
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex gap-6 items-start">
-                            <div className="w-12 h-12 rounded-full bg-[var(--beige-200)] flex items-center justify-center text-xl font-bold text-[var(--maroon-900)] shrink-0">3</div>
-                            <div>
-                                <h3 className="text-xl font-bold mb-2">The Judge</h3>
-                                <p className="text-[var(--text-secondary)]">
-                                    Reads the full transcript and provides a high-fidelity score with cited evidence, eliminating human bias from the evaluation.
-                                </p>
-                            </div>
-                        </div>
+                        ))}
                     </div>
 
-                    <h2 className="text-3xl font-bold mt-16 mb-6 text-[var(--text-primary)]">Data Governance & Retention</h2>
-                    <p className="text-[var(--text-secondary)] mb-6">
+                    <h2 style={{ fontSize: '2rem', fontWeight: 700, marginTop: '4rem', marginBottom: '1.5rem', color: 'var(--text-primary)' }}>Data Governance & Retention</h2>
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
                         Behavior analysis generates significant conversational data. To ensure privacy and cost-efficiency:
                     </p>
-                    <ul className="list-disc pl-6 space-y-2 text-[var(--text-secondary)] mb-8">
-                        <li><strong>Sovereign Storage:</strong> All chat transcripts are stored in encrypted object storage (Wasabi), keeping your database lean.</li>
-                        <li><strong>Retention Policies:</strong>
-                            <ul className="list-circle pl-6 mt-2">
-                                <li><strong>Indie Tier:</strong> 90-day retention</li>
-                                <li><strong>Pro Tier:</strong> 365-day retention</li>
+                    <ul style={{ listStyle: 'disc', paddingLeft: '1.5rem', color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: 1.6 }}>
+                        <li style={{ marginBottom: '0.5rem' }}><strong style={{ color: 'var(--text-primary)' }}>Sovereign Storage:</strong> All chat transcripts are stored in encrypted object storage (Wasabi), keeping your database lean.</li>
+                        <li><strong style={{ color: 'var(--text-primary)' }}>Retention Policies:</strong>
+                            <ul style={{ listStyle: 'circle', paddingLeft: '1.5rem', marginTop: '0.5rem' }}>
+                                <li style={{ marginBottom: '0.25rem' }}><strong style={{ color: 'var(--text-primary)' }}>Indie Tier:</strong> 90-day retention</li>
+                                <li><strong style={{ color: 'var(--text-primary)' }}>Pro Tier:</strong> 365-day retention</li>
                             </ul>
                         </li>
                     </ul>
 
-                    <div className="bg-[var(--beige-100)] rounded-xl p-8 mt-12 text-center">
-                        <h3 className="text-2xl font-bold mb-4">Ready to test the unseen?</h3>
-                        <p className="mb-6 text-[var(--text-secondary)]">
+                    <div style={{
+                        background: 'var(--beige-100)',
+                        borderRadius: 'var(--radius-lg)',
+                        padding: '2rem',
+                        marginTop: '3rem',
+                        textAlign: 'center'
+                    }}>
+                        <h3 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '1rem' }}>Ready to test the unseen?</h3>
+                        <p style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>
                             Behavior Analysis is available as an add-on for Indie and Pro plans.
                         </p>
-                        <Link href="/pricing" className="inline-block bg-[var(--primary)] text-white px-8 py-3 rounded-lg font-semibold hover:opacity-90 transition-opacity">
+                        <Link href="/pricing" style={{
+                            display: 'inline-block',
+                            background: 'var(--primary)',
+                            color: 'white',
+                            padding: '0.75rem 2rem',
+                            borderRadius: 'var(--radius-md)',
+                            fontWeight: 600,
+                            textDecoration: 'none',
+                            transition: 'opacity 0.2s'
+                        }}>
                             View Pricing
                         </Link>
                     </div>
