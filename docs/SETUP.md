@@ -10,7 +10,7 @@ This guide will help you set up the Ghost Tester platform locally.
 - Accounts for:
   - Supabase (database & storage)
   - OpenAI (LLM)
-  - Pinecone (vector embeddings)
+
   - Clerk (authentication)
   - Stripe (billing)
   - Sentry (error tracking)
@@ -78,7 +78,7 @@ API will be available at `http://localhost:3001`
 cd ../worker
 npm install
 cp .env.example .env
-# Edit .env with your Redis, Supabase, OpenAI, Pinecone keys
+# Edit .env with your Redis, Supabase, OpenAI keys
 npm run dev
 ```
 
@@ -122,9 +122,7 @@ LLAMA_API_KEY=ollama
 LLAMA_API_URL=http://localhost:11434/v1
 LLAMA_MODEL=llama3.2:latest
 
-# Pinecone
-PINECONE_API_KEY=pcsk_3DXKLG_RVif7NDP1SjVQV8WkFpyfa1tvfZcWkKoERzqgnc6wmfvqGXXqDrgBev3rSBSgzr
-PINECONE_INDEX_NAME=ghost-tester
+
 
 # Sentry
 SENTRY_DSN=https://...@sentry.io/...
@@ -147,9 +145,7 @@ LLAMA_API_KEY=ollama
 LLAMA_API_URL=http://localhost:11434/v1
 LLAMA_MODEL=llama3.2:latest
 
-# Pinecone
-PINECONE_API_KEY=pcsk_3DXKLG_RVif7NDP1SjVQV8WkFpyfa1tvfZcWkKoERzqgnc6wmfvqGXXqDrgBev3rSBSgzr
-PINECONE_INDEX_NAME=ghost-tester
+
 
 # Test Runners
 PLAYWRIGHT_GRID_URL=http://localhost:4444
@@ -184,12 +180,7 @@ LOG_LEVEL=info
    - `QWEN_API_URL=http://localhost:11434/v1`
    - `QWEN_MODEL=qwen2.5:latest`
 
-### Pinecone
 
-1. API key provided: `pcsk_3DXKLG_RVif7NDP1SjVQV8WkFpyfa1tvfZcWkKoERzqgnc6wmfvqGXXqDrgBev3rSBSgzr`
-2. Create an index named `ghost-tester` using Pinecone CLI or Console
-3. Add API key to Worker `.env` file
-4. Models are pulled automatically when you run `ollama pull llama3.2:latest` and `ollama pull qwen2.5:latest`
 
 ### Supabase Authentication
 

@@ -46,7 +46,7 @@ REDIS_URL=redis://localhost:6379
 CLERK_SECRET_KEY=sk_test_...
 STRIPE_SECRET_KEY=sk_test_...
 OPENAI_API_KEY=sk-...
-PINECONE_API_KEY=...
+
 ```
 
 ### Worker Service (`worker/.env`)
@@ -63,7 +63,7 @@ SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZi
 
 # Other APIs (add as needed)
 OPENAI_API_KEY=sk-...
-PINECONE_API_KEY=...
+
 ```
 
 ## Step 3: Verify Setup
@@ -124,7 +124,7 @@ If you created your database before February 2025, run the patch script in `api/
 
 ## Next Steps
 
-1. Set up other APIs (OpenAI, Pinecone, Clerk, Stripe)
+1. Set up other APIs (OpenAI, Clerk, Stripe)
 2. Configure authentication with Clerk
 3. Test creating a project and test run
 4. Verify artifacts are uploaded to storage correctly

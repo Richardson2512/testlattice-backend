@@ -25,7 +25,7 @@ This repository contains two main backend services:
 - **Database**: Supabase (PostgreSQL)
 - **Storage**: Supabase Storage (S3-compatible)
 - **Queue**: BullMQ + Redis
-- **AI/ML**: Llama 4 (LLM), Pinecone (Embeddings), Qwen Instruct (Instruction Parsing)
+- **AI/ML**: Llama 4 (LLM), Qwen Instruct (Instruction Parsing)
 - **Test Runners**: Playwright (Web), Appium (Mobile)
 - **Monitoring**: Sentry
 - **Authentication**: Supabase Auth
@@ -38,7 +38,7 @@ This repository contains two main backend services:
 - Redis server (local or cloud)
 - Supabase account and project
 - Ollama (for local Llama 4 and Qwen models) or API keys for cloud providers
-- Pinecone API key (optional)
+
 
 ### Installation
 
@@ -102,9 +102,7 @@ QWEN_API_KEY=ollama
 QWEN_API_URL=http://localhost:11434/v1
 QWEN_MODEL=qwen2.5:latest
 
-# Pinecone (optional)
-PINECONE_API_KEY=your_pinecone_api_key
-PINECONE_INDEX_NAME=your_index_name
+
 
 # Sentry (optional)
 SENTRY_DSN=your_sentry_dsn
@@ -170,7 +168,7 @@ Rihario-backend/
     │   ├── services/        # External services
     │   │   ├── llama.ts     # Llama 4 integration
     │   │   ├── qwen.ts      # Qwen Instruct integration
-    │   │   ├── pinecone.ts  # Pinecone integration
+
     │   │   ├── storage.ts   # Supabase Storage
     │   │   └── comprehensiveTesting.ts # Comprehensive testing service
     │   ├── utils/           # Utilities

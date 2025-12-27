@@ -164,6 +164,6 @@ All services are configured and ready:
 - ✅ Web Testing (Playwright)
 - ✅ Error Tracking (Sentry)
 - ✅ AI/LLM (Llama 4 & Qwen via Ollama)
-- ✅ Vector DB (Pinecone)
+
 
 **Start testing!** 🚀

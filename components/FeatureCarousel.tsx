@@ -157,54 +157,48 @@ const features: FeatureSlide[] = [
         )
     },
     {
-        id: 'cicd',
-        title: 'CI/CD Pipeline',
-        status: 'Integrated',
-        icon: '🚀',
+        id: 'behavior',
+        title: 'Behavior Analysis',
+        status: 'Insightful',
+        icon: '🧠',
         color: '#8b5cf6', // purple
         content: (
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
-                {/* YAML Config */}
-                <div style={{ marginBottom: '1.5rem', padding: '1rem', background: theme.bg.tertiary, borderRadius: '6px', border: `1px solid ${theme.border.subtle}` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>.github/workflows/test.yml</div>
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>YAML</div>
-                    </div>
-                    <div style={{ color: '#ec4899', marginBottom: '0.25rem' }}>on: [push, pull_request]</div>
-                    <div style={{ color: '#8b5cf6', paddingLeft: '1rem', marginBottom: '0.25rem' }}>jobs:</div>
-                    <div style={{ color: '#3b82f6', paddingLeft: '2rem', marginBottom: '0.25rem' }}>rihario:</div>
-                    <div style={{ paddingLeft: '3rem', color: 'var(--text-primary)' }}>runs-on: ubuntu-latest</div>
-                    <div style={{ paddingLeft: '3rem', color: 'var(--text-primary)' }}>steps:</div>
-                    <div style={{ paddingLeft: '4rem', color: '#10b981' }}>- uses: Rihario/action@v2</div>
+                {/* Heatmap/Visual Mock */}
+                <div style={{ flex: 1, position: 'relative', background: '#f8fafc', borderRadius: '8px', border: `1px solid ${theme.border.subtle}`, overflow: 'hidden', marginBottom: '1.5rem' }}>
+                    <div style={{ position: 'absolute', inset: 0, opacity: 0.1, backgroundImage: 'radial-gradient(#64748b 1px, transparent 1px)', backgroundSize: '10px 10px' }}></div>
+
+                    {/* Mock Page Elements */}
+                    <div style={{ position: 'absolute', top: '20px', left: '20px', right: '20px', height: '40px', background: '#fff', borderRadius: '4px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}></div>
+                    <div style={{ position: 'absolute', top: '80px', left: '20px', width: '60%', height: '20px', background: '#cbd5e1', borderRadius: '4px' }} className="animate-pulse"></div>
+                    <div style={{ position: 'absolute', top: '120px', left: '20px', right: '20px', bottom: '20px', background: '#fff', borderRadius: '4px', border: '1px solid #e2e8f0' }}></div>
+
+                    {/* Heatmap Hotspots */}
+                    <div style={{ position: 'absolute', top: '40px', right: '40px', width: '60px', height: '60px', background: 'radial-gradient(circle, rgba(239, 68, 68, 0.6) 0%, transparent 70%)', borderRadius: '50%', filter: 'blur(5px)' }}></div>
+                    <div style={{ position: 'absolute', bottom: '60px', left: '80px', width: '80px', height: '80px', background: 'radial-gradient(circle, rgba(59, 130, 246, 0.5) 0%, transparent 70%)', borderRadius: '50%', filter: 'blur(8px)' }}></div>
                 </div>
 
-                {/* Pipeline Status */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.75rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
-                        <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#10b981' }} />
-                        <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>Build #4289</div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>feat: update cart logic</div>
-                        </div>
-                        <div style={{ fontSize: '0.8rem', color: '#10b981' }}>Passed</div>
+                {/* Metrics Row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                    <div style={{ padding: '0.75rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '6px', borderLeft: '3px solid #ef4444' }}>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Rage Clicks</div>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#ef4444' }}>3 Detected</div>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sign Up Button</div>
                     </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.75rem', background: '#fff', border: '1px solid #3b82f6', borderRadius: '6px', boxShadow: '0 4px 6px -1px rgba(59, 130, 246, 0.1)' }}>
-                        <div style={{ position: 'relative', width: '12px', height: '12px' }}>
-                            <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: '#3b82f6', opacity: 0.3 }} className="animate-pulse" />
-                            <span style={{ position: 'absolute', inset: '25%', borderRadius: '50%', background: '#3b82f6' }} />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>E2E Tests (Rihario)</div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Running 245 tests...</div>
-                        </div>
-                        <div style={{ fontSize: '0.8rem', color: '#3b82f6' }}>14s</div>
+                    <div style={{ padding: '0.75rem', background: 'rgba(139, 92, 246, 0.1)', borderRadius: '6px', borderLeft: '3px solid #8b5cf6' }}>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Engagement</div>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#8b5cf6' }}>High (85%)</div>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Pricing Page</div>
                     </div>
                 </div>
 
-                <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    Continuous integration enabled on 3 branches
+                {/* Insight Text */}
+                <div style={{ padding: '0.75rem', background: '#1e293b', borderRadius: '6px', color: '#e2e8f0', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                    <span style={{ fontSize: '1.2rem' }}>💡</span>
+                    <div>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8' }}>AI INSIGHT</div>
+                        <div style={{ fontSize: '0.8rem' }}>"Users are clicking the non-interactive 'Premium' card. Consider making it clickable."</div>
+                    </div>
                 </div>
             </div>
         )

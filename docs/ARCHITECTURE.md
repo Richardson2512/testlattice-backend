@@ -26,7 +26,7 @@ flowchart LR
     J --> K[Worker Pool - Node Workers]
     K --> L[Test Runner Cluster]
     K --> M[LLM Service Adapter (OpenAI)]
-    K --> N[Embeddings Store - Pinecone]
+
     K --> O[Vision Service / OCR]
   end
 
@@ -96,7 +96,7 @@ flowchart LR
   - LLM coordination (OpenAI)
   - Artifact collection and storage
   - Report generation
-  - Embedding creation (Pinecone)
+
 
 ## Data Flow
 
@@ -110,7 +110,7 @@ flowchart LR
 8. **Worker** executes actions via Playwright/Appium
 9. **Worker** collects artifacts (screenshots, DOM, logs) and stores in Supabase Storage
 10. **Worker** loops until termination (coverage reached, time limit, error)
-11. **Worker** post-processes: video stitching, visual diffs, embedding creation, report generation
+11. **Worker** post-processes: video stitching, visual diffs, report generation
 12. **API server** updates `TestRun` status, stores final report, notifies user
 13. **Billing**: Usage metered → Stripe receives usage record
 
@@ -198,7 +198,7 @@ while(true) {
 
 - **Test Runner Cost**: Use spot instances and autoscaling
 - **LLM Cost**: Batch calls, use cheaper models for simple tasks
-- **Embedding Cache**: Reuse Pinecone embeddings for similar runs
+
 - **Concurrency Limits**: Tier test concurrency per subscription plan
 - **Worker Pool**: Auto-scale workers based on queue depth
 
@@ -207,5 +207,5 @@ while(true) {
 - **Queue Depth**: Monitor BullMQ queue size
 - **Worker Health**: Track worker availability and processing time
 - **Test Latency**: Measure end-to-end test execution time
-- **Cost Metrics**: Track OpenAI, Pinecone, and runner costs
+- **Cost Metrics**: Track OpenAI and runner costs
 - **Error Rates**: Monitor failures and retry attempts
