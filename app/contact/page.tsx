@@ -47,33 +47,34 @@ export default function ContactPage() {
 
                     {/* RIGHT: Form */}
                     <div className="animate-enter delay-100" style={{
-                        padding: '3.5rem',
+                        padding: '2.5rem',
                         background: 'var(--bg-card)',
                         border: '1px solid var(--border-medium)',
                         borderRadius: 'var(--radius-xl)',
                         boxShadow: 'var(--shadow-lg)'
                     }}>
-                        <h2 style={{ fontSize: '1.75rem', marginBottom: '2rem', letterSpacing: '-0.01em' }}>Send a message</h2>
-                        <form style={{ display: 'grid', gap: '1.75rem' }}>
+                        <h2 style={{ fontSize: '1.75rem', marginBottom: '1.5rem', letterSpacing: '-0.01em' }}>Send a message</h2>
+                        <form style={{ display: 'grid', gap: '1.5rem' }}>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.25rem' }}>
                                 <FormInput label="First Name" placeholder="Jane" />
                                 <FormInput label="Last Name" placeholder="Doe" />
                             </div>
 
                             <FormInput label="Work Email" placeholder="jane@company.com" type="email" />
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                                 <label style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Topic</label>
                                 <select style={{
-                                    padding: '0.875rem',
+                                    padding: '0.75rem 0.875rem',
                                     background: 'var(--beige-50)',
                                     border: '1px solid var(--border-medium)',
                                     borderRadius: 'var(--radius-md)',
                                     color: 'var(--text-primary)',
                                     fontSize: '1rem',
                                     outline: 'none',
-                                    cursor: 'pointer'
+                                    cursor: 'pointer',
+                                    width: '100%'
                                 }}>
                                     <option>Technical Support</option>
                                     <option>Sales Inquiry</option>
@@ -83,13 +84,13 @@ export default function ContactPage() {
                                 </select>
                             </div>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                                 <label style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Message</label>
                                 <textarea
-                                    rows={5}
+                                    rows={4}
                                     placeholder="How can we help you?"
                                     style={{
-                                        padding: '0.875rem',
+                                        padding: '0.75rem 0.875rem',
                                         background: 'var(--beige-50)',
                                         border: '1px solid var(--border-medium)',
                                         borderRadius: 'var(--radius-md)',
@@ -97,16 +98,17 @@ export default function ContactPage() {
                                         fontSize: '1rem',
                                         resize: 'vertical',
                                         fontFamily: 'inherit',
-                                        outline: 'none'
+                                        outline: 'none',
+                                        width: '100%'
                                     }}
                                 />
                             </div>
 
-                            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem', padding: '1rem' }}>
+                            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.25rem', padding: '0.875rem' }}>
                                 Send Message
                             </button>
 
-                            <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                            <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
                                 Typically responds within 2 business hours.
                             </p>
                         </form>
@@ -156,19 +158,20 @@ function ContactInfoBlock({ icon, title, desc, action }: { icon: string, title: 
 
 function FormInput({ label, placeholder, type = 'text' }: { label: string, placeholder: string, type?: string }) {
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             <label style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</label>
             <input
                 type={type}
                 placeholder={placeholder}
                 style={{
-                    padding: '0.875rem',
+                    padding: '0.75rem 0.875rem',
                     background: 'var(--beige-50)',
                     border: '1px solid var(--border-medium)',
                     borderRadius: 'var(--radius-md)',
                     color: 'var(--text-primary)',
                     fontSize: '1rem',
-                    outline: 'none'
+                    outline: 'none',
+                    width: '100%'
                 }}
             />
         </div>
