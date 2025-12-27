@@ -66,7 +66,7 @@ export default function WhyRihario() {
                                 "name": "How much does Rihario cost?",
                                 "acceptedAnswer": {
                                     "@type": "Answer",
-                                    "text": "Rihario pricing starts at $19/month for Starter (50 tests), $49/month for Indie (200 tests with God Mode), and $99/month for Pro (600 tests with API access). All plans include comprehensive testing, cross-browser support, and no-code interface."
+                                    "text": "Rihario pricing starts at $19/month for Starter (100 tests), $39/month for Indie (300 tests with God Mode), and $99/month for Pro (1,000 tests with API access). All plans include comprehensive testing, cross-browser support, and no-code interface."
                                 }
                             },
                             {
@@ -277,7 +277,7 @@ export default function WhyRihario() {
                                         <div style={{ fontWeight: 'bold', color: '#065f46' }}>Rihario Indie</div>
                                         <div style={{ fontSize: '0.8rem', color: '#065f46' }}>Self-serve, cancel anytime</div>
                                     </div>
-                                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#065f46' }}>$49/mo</div>
+                                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#065f46' }}>$39/mo</div>
                                 </div>
                             </div>
                         </div>
@@ -303,7 +303,7 @@ export default function WhyRihario() {
                             </div>
                         </div>
                         <p style={{ textAlign: 'center', marginTop: '2rem', color: theme.text.secondary }}>
-                            Based on replacing 15 hours/month of manual testing with the $49 Indie plan.
+                            Based on replacing 15 hours/month of manual testing with the $39 Indie plan.
                         </p>
                     </section>
 

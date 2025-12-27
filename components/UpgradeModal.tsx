@@ -57,8 +57,6 @@ export function UpgradeModal({
         'scheduled': 'Scheduled Tests',
         'multiple-projects': 'Multiple Projects',
         'unlimited-projects': 'Unlimited Projects',
-        'ci-integration': 'CI Integration',
-        'shared-dashboards': 'Shared Dashboards',
       }
       const featureName = featureNames[feature || ''] || 'This Feature'
       message = `${featureName} is not available on your current plan. Upgrade to ${tierInfo.name} to unlock it.`

@@ -120,7 +120,7 @@ export const PRICING_TIERS: Record<PricingTier, PricingTierInfo> = {
     name: 'Indie',
     price: 39,
     priceLabel: '$39',
-    description: 'For growing teams and multiple projects',
+    description: 'For scaling founders and multiple projects',
     limits: {
       totalTestsPerMonth: 300,
       maxVisualTests: 60,
@@ -135,7 +135,7 @@ export const PRICING_TIERS: Record<PricingTier, PricingTierInfo> = {
       scheduledTests: false,
       sharedDashboards: false,
       ciIntegration: false,
-      teamMembers: 3,
+      teamMembers: 1,
     },
     features: [
       '300 tests / month',

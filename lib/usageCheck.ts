@@ -89,10 +89,8 @@ export function isFeatureAvailable(tier: PricingTier, feature: string): boolean 
       return tierInfo.limits.maxProjects !== 1
     case 'unlimited-projects':
       return tierInfo.limits.maxProjects === 'unlimited'
-    case 'ci-integration':
-      return tierInfo.limits.ciIntegration
-    case 'shared-dashboards':
-      return tierInfo.limits.sharedDashboards
+    case 'unlimited-projects':
+      return tierInfo.limits.maxProjects === 'unlimited'
     default:
       return true
   }

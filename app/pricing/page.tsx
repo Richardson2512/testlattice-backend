@@ -66,7 +66,7 @@ export default function PricingPage() {
             color: 'var(--text-secondary)',
             lineHeight: 1.6
           }}>
-            Transparent pricing for teams of all sizes. Upgrade anytime to unlock more features.
+            Transparent pricing for developers and solo founders. Upgrade anytime to unlock more features.
           </p>
         </div>
       </section>

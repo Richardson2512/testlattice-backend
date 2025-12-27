@@ -17,8 +17,6 @@ const featureNames: Record<string, string> = {
   'scheduled': 'Scheduled Tests',
   'multiple-projects': 'Multiple Projects',
   'unlimited-projects': 'Unlimited Projects',
-  'ci-integration': 'CI Integration',
-  'shared-dashboards': 'Shared Dashboards',
 }
 
 export function UpgradeBanner({
