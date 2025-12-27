@@ -46,6 +46,7 @@ import { integrationRoutes } from './routes/integrations'
 import { billingRoutes } from './routes/billing'
 import { fixPromptRoutes } from './routes/fixPrompts'
 import { adminRoutes } from './routes/admin'
+import { behaviorRoutes } from './routes/behavior'
 import { TestControlWebSocket } from './lib/websocket'
 import { RedisWebSocketManager } from './lib/websocketRedis'
 import { startCleanupScheduler } from './jobs/cleanupArtifacts'
@@ -176,6 +177,9 @@ async function registerRoutes() {
 
     // Admin routes (requires admin auth)
     await fastify.register(adminRoutes, { prefix: '/api/admin' })
+
+    // Behavior Analysis routes
+    await fastify.register(behaviorRoutes, { prefix: '/api/behavior' })
   }, { prefix: '' })
 
   // Set up Sentry error handler (must be after all routes)

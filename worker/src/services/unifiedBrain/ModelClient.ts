@@ -1,3 +1,4 @@
+
 // Model Client - Handles API calls to OpenAI GPT-5 Mini
 // Single model, no fallback logic
 
@@ -13,6 +14,7 @@ export interface ModelConfig {
     model: string
     temperature: number
     maxTokens: number
+    provider?: 'openai' | 'anthropic' | 'google'
     clientLabel?: string  // Optional label for token tracking (e.g., 'Guest', 'Registered')
 }
 
@@ -63,13 +65,14 @@ export class ModelClient {
                 // Parse response
                 let parsedResponse: any
                 try {
+
                     parsedResponse = JSON.parse(response)
                 } catch {
                     // If not JSON, treat as success
                     this.metrics.success++
                     return {
                         content: response,
-                        model: 'gpt-5-mini',
+                        model: 'gpt-5-mini', // Type cast not needed if string matches literal type, but keeping it for safety
                         attempt: attempt + 1,
                         fallbackUsed: false,
                     }
@@ -152,9 +155,21 @@ export class ModelClient {
     }
 
     /**
-     * Call OpenAI GPT-5 Mini via API
+     * Call Model logic (OpenAI / Anthropic / Gemini)
      */
     private async callModel(config: ModelConfig, prompt: string, systemPrompt: string): Promise<string> {
+        // Dispatch based on provider
+        if (config.provider === 'anthropic') {
+            return this.callAnthropic(config, prompt, systemPrompt)
+        }
+        if (config.provider === 'google') {
+            return this.callGemini(config, prompt, systemPrompt)
+        }
+        // Default to OpenAI
+        return this.callOpenAI(config, prompt, systemPrompt)
+    }
+
+    private async callOpenAI(config: ModelConfig, prompt: string, systemPrompt: string): Promise<string> {
         // Validate configuration before making request
         if (!config.apiUrl || !config.model) {
             throw new Error(`Invalid model configuration: apiUrl=${config.apiUrl}, model=${config.model}`)
@@ -227,6 +242,62 @@ export class ModelClient {
             }
             // Re-throw with context
             throw error
+        }
+    }
+
+    private async callAnthropic(config: ModelConfig, prompt: string, systemPrompt: string): Promise<string> {
+        if (!config.apiKey) throw new Error('ANTHROPIC_API_KEY is required')
+
+        try {
+            const response = await axios.post(
+                'https://api.anthropic.com/v1/messages',
+                {
+                    model: config.model || 'claude-3-5-sonnet-20240620',
+                    max_tokens: config.maxTokens,
+                    temperature: config.temperature,
+                    system: systemPrompt,
+                    messages: [{ role: 'user', content: prompt }]
+                },
+                {
+                    headers: {
+                        'x-api-key': config.apiKey,
+                        'anthropic-version': '2023-06-01',
+                        'content-type': 'application/json'
+                    }
+                }
+            )
+            return response.data.content[0].text
+        } catch (error: any) {
+            console.error('Anthropic API Error:', error.response?.data || error.message)
+            throw new Error(`Anthropic API failed: ${error.message}`)
+        }
+    }
+
+    private async callGemini(config: ModelConfig, prompt: string, systemPrompt: string): Promise<string> {
+        if (!config.apiKey) throw new Error('GEMINI_API_KEY is required')
+
+        try {
+            // Gemini doesn't have a system prompt in the same way, we prepend it
+            const fullPrompt = `${systemPrompt}\n\n${prompt}`
+
+            const response = await axios.post(
+                `https://generativelanguage.googleapis.com/v1beta/models/${config.model || 'gemini-1.5-flash'}:generateContent?key=${config.apiKey}`,
+                {
+                    contents: [{
+                        parts: [{ text: fullPrompt }]
+                    }],
+                    generationConfig: {
+                        temperature: config.temperature,
+                        maxOutputTokens: config.maxTokens,
+                        // Force JSON if possible, but Gemini validation is trickier
+                        responseMimeType: "application/json"
+                    }
+                }
+            )
+            return response.data.candidates[0].content.parts[0].text
+        } catch (error: any) {
+            console.error('Gemini API Error:', error.response?.data || error.message)
+            throw new Error(`Gemini API failed: ${error.message}`)
         }
     }
 

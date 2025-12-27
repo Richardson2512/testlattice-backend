@@ -76,9 +76,11 @@ export interface TestOptions {
   stressTest?: boolean;
   coverage?: string[];
   maxSteps?: number;
-  testMode?: 'single' | 'multi' | 'all' | 'monkey';
+  testMode?: 'single' | 'multi' | 'all' | 'monkey' | 'behavior';
   allPages?: boolean;
   monkeyMode?: boolean;
+  // Behavior Analysis specific options
+  behaviors?: string[];
   monkeyConfig?: {
     randomness?: number;
     maxExplorations?: number;

@@ -233,6 +233,10 @@ const guestProcessor = new GuestTestProcessor(
 )
 console.log('✅ Guest Test Processor initialized (skip diagnosis, 25-step limit)')
 
+import { BehaviorProcessor } from './processors/behaviorProcessor'
+const behaviorProcessor = new BehaviorProcessor(registeredBrain)
+console.log('✅ Behavior Processor initialized')
+
 // Worker processor
 async function processTestJob(jobData: JobData) {
   const { runId, options } = jobData
@@ -241,6 +245,11 @@ async function processTestJob(jobData: JobData) {
   if (options?.isGuestRun || options?.testMode === 'guest') {
     console.log(`[${runId}] 🎯 Routing to Guest Test Processor (no diagnosis)`)
     return await guestProcessor.process(jobData)
+  }
+
+  if (options?.testMode === 'behavior') {
+    console.log(`[${runId}] 🎯 Routing to Behavior Processor`)
+    return await behaviorProcessor.process(jobData)
   }
 
   console.log(`[${runId}] Processing test job:`, jobData.build.type, jobData.profile.device)

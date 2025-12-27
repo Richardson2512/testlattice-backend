@@ -138,7 +138,7 @@ export interface TestOptions {
   stressTest?: boolean
   coverage?: string[]
   maxSteps?: number
-  testMode?: 'single' | 'multi' | 'all' | 'monkey' | 'guest'
+  testMode?: 'single' | 'multi' | 'all' | 'monkey' | 'guest' | 'behavior'
   allPages?: boolean
   monkeyMode?: boolean
   monkeyConfig?: {
@@ -146,6 +146,7 @@ export interface TestOptions {
     maxExplorations?: number
     allowNavigation?: boolean
   }
+  behaviors?: string[] // Behavior Analysis specific
   environment?: TestEnvironment
   approvalPolicy?: ApprovalPolicy
   designSpec?: DesignSpec  // Optional design specification for visual consistency checks

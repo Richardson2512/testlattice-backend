@@ -173,6 +173,25 @@ export class WasabiStorageService {
     }
 
     /**
+     * Upload generic JSON data (gzipped)
+     */
+    async uploadJson(path: string, data: any): Promise<string> {
+        // Gzip the data
+        const jsonString = JSON.stringify(data)
+        const compressed = gzipSync(Buffer.from(jsonString, 'utf-8'))
+
+        await this.client.send(new PutObjectCommand({
+            Bucket: this.bucket,
+            Key: path,
+            Body: compressed,
+            ContentType: 'application/json',
+            ContentEncoding: 'gzip',
+        }))
+
+        return `${this.baseUrl}/${path}`
+    }
+
+    /**
      * Upload Playwright trace file (ZIP or GZ)
      * For advanced trace viewer feature
      */
