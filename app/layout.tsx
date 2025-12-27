@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    url: 'https://rihario.dev',
+    url: 'https://testlattice.vercel.app',
     title: 'Rihario - The Vibe Testing Platform',
     description: 'Stop writing flaky scripts. Start Vibe Testing with autonomous AI agents.',
     siteName: 'Rihario',
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
     description: 'Stop writing flaky scripts. Start Vibe Testing with autonomous AI agents.',
   },
   alternates: {
-    canonical: 'https://rihario.dev',
+    canonical: 'https://testlattice.vercel.app',
   },
 }
 
