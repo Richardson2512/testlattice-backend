@@ -172,7 +172,7 @@ const features: FeatureSlide[] = [
                     </div>
                     <div style={{ color: '#ec4899', marginBottom: '0.25rem' }}>on: [push, pull_request]</div>
                     <div style={{ color: '#8b5cf6', paddingLeft: '1rem', marginBottom: '0.25rem' }}>jobs:</div>
-                    <div style={{ color: '#3b82f6', paddingLeft: '2rem', marginBottom: '0.25rem' }}>test-lattice:</div>
+                    <div style={{ color: '#3b82f6', paddingLeft: '2rem', marginBottom: '0.25rem' }}>rihario:</div>
                     <div style={{ paddingLeft: '3rem', color: 'var(--text-primary)' }}>runs-on: ubuntu-latest</div>
                     <div style={{ paddingLeft: '3rem', color: 'var(--text-primary)' }}>steps:</div>
                     <div style={{ paddingLeft: '4rem', color: '#10b981' }}>- uses: Rihario/action@v2</div>
