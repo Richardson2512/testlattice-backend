@@ -227,51 +227,7 @@ export default function FeaturesPage() {
                 </div>
             </section>
 
-            {/* 5. Integrations Row */}
-            <section style={{ padding: '4rem 0', borderTop: '1px solid var(--border-light)', borderBottom: '1px solid var(--border-light)', background: '#fff' }}>
-                <div className="container" style={{ textAlign: 'center' }}>
-                    <SectionLabel text="TRUSTED ECOSYSTEM" color="#666" />
-                    <div style={{
-                        display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4rem', flexWrap: 'wrap',
-                        opacity: 0.8, filter: 'grayscale(100%)', transition: 'filter 0.3s'
-                    }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, fontSize: '1.25rem' }}>{Logos.Jira} Jira</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, fontSize: '1.25rem' }}>{Logos.Slack} Slack</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, fontSize: '1.25rem' }}>{Logos.Linear} Linear</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, fontSize: '1.25rem' }}>{Logos.GitHub} GitHub</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, fontSize: '1.25rem' }}>GitLab</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, fontSize: '1.25rem' }}>CircleCI</div>
-                    </div>
-                </div>
-            </section>
 
-            {/* 6. Enterprise Security */}
-            <section style={{ padding: '6rem 0' }}>
-                <div className="container">
-                    <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
-                        <h2 style={{ fontSize: '2.5rem' }}>Enterprise Grade Security</h2>
-                        <p style={{ color: 'var(--text-secondary)' }}>Review our compliance reports anytime.</p>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', flexWrap: 'wrap' }}>
-                        {['SOC2 Ready', 'HIPAA Ready', 'GDPR Ready', 'ISO Ready'].map((badge, i) => (
-                            <div key={i} style={{
-                                width: '200px', height: '140px', border: '1px solid #d1d5db', borderRadius: '4px',
-                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                                background: '#fff', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-                            }}>
-                                <div style={{
-                                    width: '50px', height: '50px', background: '#f3f4f6', borderRadius: '50%', marginBottom: '1rem',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem'
-                                }}>
-                                    🛡️
-                                </div>
-                                <div style={{ fontWeight: 'bold', color: '#374151' }}>{badge}</div>
-                                <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>Compliance Ready</div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </section>
 
             {/* Footer */}
             <footer style={{ background: 'var(--beige-100)', padding: '4rem 0 2rem' }}>

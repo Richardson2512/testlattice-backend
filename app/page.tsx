@@ -107,68 +107,9 @@ export default async function Home() {
         </div>
       </section>
 
-      {/* Social Proof */}
-      <SocialProofSection />
 
-      {/* Cross-Browser Testing Highlight */}
-      <section style={{
-        padding: '6rem 0',
-        background: 'linear-gradient(180deg, var(--bg-primary) 0%, var(--beige-100) 100%)',
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
-        <div className="container" style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 2rem', position: 'relative', zIndex: 1 }}>
-          <div style={{ textAlign: 'center', maxWidth: '800px', margin: '0 auto' }}>
-            <h2 style={{
-              fontSize: 'clamp(2rem, 4vw, 3rem)',
-              fontWeight: 700,
-              marginBottom: '1rem',
-              lineHeight: 1.2,
-              color: 'var(--text-primary)'
-            }}>
-              Test Once. See Results Everywhere.
-            </h2>
-            <p style={{
-              fontSize: '1.25rem',
-              color: 'var(--text-secondary)',
-              marginBottom: '2.5rem',
-              lineHeight: 1.6
-            }}>
-              Run your tests across Chrome, Firefox, and Safari in parallel — no re-runs, no guesswork.
-            </p>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: '1.5rem',
-              marginBottom: '2.5rem',
-              maxWidth: '600px',
-              margin: '0 auto 2.5rem'
-            }}>
-              {['Chrome', 'Firefox', 'Safari'].map((browser) => (
-                <div key={browser} style={{
-                  padding: '1.5rem',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border-light)',
-                  borderRadius: 'var(--radius-lg)',
-                  textAlign: 'center'
-                }}>
-                  <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>🌐</div>
-                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{browser}</div>
-                </div>
-              ))}
-            </div>
-            <Link href="/pricing" className="btn btn-primary" style={{
-              display: 'inline-block',
-              padding: '1rem 2rem',
-              fontSize: '1rem',
-              fontWeight: 600,
-              textDecoration: 'none'
-            }}>
-              Upgrade to Pro for full cross-browser coverage
-            </Link>
-          </div>
-        </div>
-      </section>
+
+
 
       {/* How it Works */}
       <HowItWorksSection />
@@ -184,8 +125,70 @@ export default async function Home() {
       {/* FAQ */}
       <FaqSection />
 
-      {/* Final CTA */}
-      <CtaSection />
+      {/* Replaced Final CTA with Test Once Section */}
+      <section style={{
+        padding: '8rem 0',
+        background: 'linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 100%)',
+        position: 'relative',
+        overflow: 'hidden'
+      }}>
+        <div className="container" style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 2rem', position: 'relative', zIndex: 1 }}>
+          <div style={{ textAlign: 'center', maxWidth: '800px', margin: '0 auto' }}>
+            <h2 style={{
+              fontSize: 'clamp(2.5rem, 5vw, 3.5rem)',
+              fontWeight: 700,
+              marginBottom: '1.5rem',
+              lineHeight: 1.2,
+              color: 'var(--text-primary)'
+            }}>
+              Test Once. <span className="text-gradient">See Results Everywhere.</span>
+            </h2>
+            <p style={{
+              fontSize: '1.25rem',
+              color: 'var(--text-secondary)',
+              marginBottom: '3rem',
+              lineHeight: 1.6
+            }}>
+              Stop wasting time manually checking every browser. Run your tests across Chrome, Firefox, and Safari in parallel and ship with 100% confidence.
+            </p>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '1.5rem',
+              marginBottom: '4rem',
+              maxWidth: '600px',
+              margin: '0 auto 4rem'
+            }}>
+              {['Chrome', 'Firefox', 'Safari'].map((browser) => (
+                <div key={browser} className="glass-card" style={{
+                  padding: '1.5rem',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border-light)',
+                  borderRadius: 'var(--radius-lg)',
+                  textAlign: 'center'
+                }}>
+                  <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>🌐</div>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{browser}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem' }}>
+              <Link href="/signup" className="btn btn-primary btn-large">
+                Start for Free
+              </Link>
+              <Link href="/pricing" className="btn btn-secondary btn-large">
+                View Pricing
+              </Link>
+            </div>
+
+            <p style={{ marginTop: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+              Join 2,000+ developers shipping better code with Rihario.
+            </p>
+          </div>
+        </div>
+      </section>
 
       {/* Footer */}
       <footer style={{ background: 'var(--beige-100)', padding: '4rem 0 2rem' }}>
