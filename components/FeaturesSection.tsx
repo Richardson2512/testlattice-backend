@@ -83,6 +83,32 @@ const features: Feature[] = [
         )
     },
     {
+        id: 'ai-behavior-analysis',
+        title: 'AI Behavior Analysis',
+        description: 'Understand how users really interact with your app. AI analyzes click patterns, navigation flows, and engagement metrics.',
+        demoTitle: 'Behavioral Insights',
+        demoContent: (
+            <div style={{ padding: '1.5rem', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1rem' }}>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Engagement Score</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--primary)' }}>92/100</div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Frustration Signals</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--success)' }}>0 detected</div>
+                    </div>
+                </div>
+                <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: '6px' }}>
+                    <div style={{ fontWeight: 600, marginBottom: '0.5rem', fontSize: '0.9rem' }}> AI Insight:</div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        "Users spend 40% more time on the pricing page when they come from the 'Features' section compared to direct traffic."
+                    </div>
+                </div>
+            </div>
+        )
+    },
+    {
         id: 'human-control',
         title: 'Human-in-the-Loop',
         description: 'Pause anytime, take control, guide the AI, then resume. It\'s like pair programming.',
