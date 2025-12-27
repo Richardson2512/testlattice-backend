@@ -31,7 +31,7 @@
   --bg-glass: rgba(255, 255, 255, 0.7);
   --bg-glass-strong: rgba(255, 255, 255, 0.9);
   --bg-card: #ffffff;
-  
+
   /* Text */
   --text-primary: var(--beige-900);
   --text-secondary: var(--beige-800);
@@ -41,7 +41,7 @@
   /* Borders */
   --border-light: rgba(61, 54, 48, 0.08);
   --border-medium: rgba(61, 54, 48, 0.15);
-  
+
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(61, 54, 48, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(61, 54, 48, 0.05), 0 2px 4px -1px rgba(61, 54, 48, 0.03);
@@ -59,7 +59,7 @@
   /* Typography */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
-  
+
   /* Layout */
   --sidebar-width: 280px;
   --max-width: 1400px;
@@ -103,16 +103,29 @@ body {
 }
 
 /* Typography Utilities */
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   color: var(--text-primary);
   letter-spacing: -0.02em;
   font-weight: 700;
   line-height: 1.2;
 }
 
-h1 { font-size: clamp(2.5rem, 5vw, 4rem); }
-h2 { font-size: clamp(2rem, 4vw, 3rem); }
-h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
+h1 {
+  font-size: clamp(2.5rem, 5vw, 4rem);
+}
+
+h2 {
+  font-size: clamp(2rem, 4vw, 3rem);
+}
+
+h3 {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}
 
 .text-gradient {
   background: linear-gradient(135deg, var(--maroon-900) 0%, var(--maroon-600) 100%);
@@ -138,7 +151,7 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
 
 .btn-primary {
   background: var(--primary);
-  color: var(--text-inverse);
+  color: var(--text-inverse) !important;
   box-shadow: var(--shadow-md);
 }
 
@@ -179,39 +192,69 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
 
 /* Animations */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .animate-enter {
   animation: fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.delay-100 { animation-delay: 100ms; }
-.delay-200 { animation-delay: 200ms; }
-.delay-300 { animation-delay: 300ms; }
+.delay-100 {
+  animation-delay: 100ms;
+}
+
+.delay-200 {
+  animation-delay: 200ms;
+}
+
+.delay-300 {
+  animation-delay: 300ms;
+}
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--beige-400);
   border-radius: var(--radius-full);
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--beige-500);
 }
@@ -229,7 +272,8 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
 
 /* Documentation Styles */
 .docs-container {
-  max-width: 72ch; /* Increased from 68ch for better readability */
+  max-width: 72ch;
+  /* Increased from 68ch for better readability */
   margin: 0;
   line-height: 1.75;
   position: relative;
@@ -237,8 +281,8 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
 }
 
 /* Hide h1 if it's in a hero */
-.docs-container .docs-hero + h1,
-.docs-hero ~ h1 {
+.docs-container .docs-hero+h1,
+.docs-hero~h1 {
   display: none;
 }
 
@@ -259,7 +303,8 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
   margin-top: 3rem;
   margin-bottom: 1rem;
   color: var(--text-primary);
-  scroll-margin-top: 100px; /* Account for sticky header when scrolling to anchor */
+  scroll-margin-top: 100px;
+  /* Account for sticky header when scrolling to anchor */
 }
 
 .docs-container h3 {
@@ -270,7 +315,8 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
   margin-top: 2rem;
   margin-bottom: 0.75rem;
   color: var(--text-primary);
-  scroll-margin-top: 100px; /* Account for sticky header when scrolling to anchor */
+  scroll-margin-top: 100px;
+  /* Account for sticky header when scrolling to anchor */
 }
 
 .docs-container p {
@@ -529,26 +575,26 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
   .docs-container {
     max-width: 100%;
   }
-  
+
   .docs-container h1 {
     font-size: 2rem;
   }
-  
+
   .docs-container h2 {
     font-size: 1.5rem;
   }
-  
+
   .docs-fit-card {
     grid-column: 1 / -1;
   }
 }
 
 /* Ensure proper spacing in docs */
-.docs-container > *:first-child {
+.docs-container>*:first-child {
   margin-top: 0;
 }
 
-.docs-container > *:last-child {
+.docs-container>*:last-child {
   margin-bottom: 0;
 }
 
@@ -683,8 +729,8 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
   overflow: hidden;
   z-index: 0;
   opacity: 0.3;
-  mask-image: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0) 100%);
-  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0) 100%);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.3) 50%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.3) 50%, rgba(0, 0, 0, 0) 100%);
 }
 
 .docs-background-svg {
@@ -697,8 +743,10 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
 .docs-content-toc-wrapper {
   display: flex;
   align-items: flex-start;
-  gap: 2.5rem; /* Fixed 40px gap between content and TOC */
-  max-width: 1200px; /* Limit total width so TOC doesn't float to edge */
+  gap: 2.5rem;
+  /* Fixed 40px gap between content and TOC */
+  max-width: 1200px;
+  /* Limit total width so TOC doesn't float to edge */
   width: 100%;
   padding: 3rem 0;
   position: relative;
@@ -707,9 +755,11 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
 /* Content Wrapper with Background */
 .docs-content-wrapper {
   position: relative;
-  overflow: hidden; /* Contain background */
+  overflow: hidden;
+  /* Contain background */
   flex: 1;
-  min-width: 0; /* Prevent flex shrinking issues */
+  min-width: 0;
+  /* Prevent flex shrinking issues */
 }
 
 /* Responsive adjustments for docs */
@@ -724,16 +774,17 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
   .docs-on-this-page {
     display: none;
   }
-  
+
   .docs-content-toc-wrapper {
-    gap: 0; /* Remove gap when TOC is hidden */
+    gap: 0;
+    /* Remove gap when TOC is hidden */
   }
-  
+
   .docs-hero {
     grid-template-columns: 1fr;
     gap: 2rem;
   }
-  
+
   .docs-hero-visual {
     width: 200px;
     height: 200px;
@@ -746,23 +797,23 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
   .docs-container {
     max-width: 100%;
   }
-  
+
   .docs-container h1 {
     font-size: 2rem;
   }
-  
+
   .docs-container h2 {
     font-size: 1.5rem;
   }
-  
+
   .docs-fit-card {
     grid-column: 1 / -1;
   }
-  
+
   .docs-hero {
     padding: 2rem 0 3rem;
   }
-  
+
   .docs-hero-visual {
     width: 180px;
     height: 180px;
@@ -773,25 +824,25 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
   .docs-content-toc-wrapper {
     padding: 1.5rem 1rem;
   }
-  
+
   .docs-hero {
     padding-bottom: 2rem;
     margin-bottom: 2rem;
   }
-  
+
   .docs-hero-title {
     font-size: 1.75rem;
   }
-  
+
   .docs-hero-summary {
     font-size: 1rem;
   }
-  
+
   .docs-hero-visual {
     width: 150px;
     height: 150px;
   }
-  
+
   .docs-background {
     height: 400px;
   }
@@ -844,6 +895,7 @@ h3 { font-size: clamp(1.5rem, 3vw, 2.25rem); }
 .hover-text-primary {
   transition: color 0.2s ease;
 }
+
 .hover-text-primary:hover {
   color: var(--primary) !important;
 }
