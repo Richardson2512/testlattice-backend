@@ -71,7 +71,7 @@ function fileExists(filePath) {
 async function validate() {
   console.log(`${colors.cyan}
 ╔═══════════════════════════════════════════════════════════╗
-║     TestLattice Platform Environment Validation          ║
+║        Rihario Platform Environment Validation           ║
 ╚═══════════════════════════════════════════════════════════╝
 ${colors.reset}`)
 
@@ -278,7 +278,7 @@ ${colors.reset}`)
     check(true, 'Wasabi credentials are set')
     check(wasabiBucket, `Wasabi bucket: ${wasabiBucket}`)
     check(wasabiRegion, `Wasabi region: ${wasabiRegion}`)
-    
+
     const expectedEndpoint = wasabiEndpoint || `https://s3.${wasabiRegion}.wasabisys.com`
     if (wasabiEndpoint) {
       check(true, `Wasabi endpoint: ${wasabiEndpoint}`)
