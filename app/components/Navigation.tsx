@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -147,7 +148,7 @@ export default function Navigation() {
           alignItems: 'center',
           gap: '0.5rem',
         }}>
-          <span style={{ fontSize: '1.35rem' }}>◈</span>
+          <Image src="/image/R-logo.png" alt="Rihario Logo" width={24} height={24} style={{ objectFit: 'contain' }} />
           {!isCollapsed && 'Rihario'}
         </Link>
         {!isCollapsed && (

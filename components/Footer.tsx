@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 
 export function Footer() {
     return (
@@ -9,7 +10,7 @@ export function Footer() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '4rem', marginBottom: '4rem' }}>
                     <div style={{ gridColumn: 'span 1' }}>
                         <div style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-inverse)' }}>
-                            <span>🧪</span> Rihario
+                            <Image src="/image/R-logo.png" alt="Rihario Logo" width={32} height={32} style={{ objectFit: 'contain' }} /> Rihario
                         </div>
                         <p style={{ color: 'var(--beige-200)', fontSize: '0.9rem' }}>
                             Vibe testing for solo & indie developers. Feel confident before shipping.

@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
@@ -68,7 +69,7 @@ export function LandingHeader() {
       <nav className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px' }}>
         {/* Logo */}
         <Link href="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '1.5rem' }}>🧪</span>
+          <Image src="/image/R-logo.png" alt="Rihario Logo" width={32} height={32} style={{ objectFit: 'contain' }} />
           <span className="text-gradient" style={{ fontSize: '1.25rem', fontWeight: 700 }}>Rihario</span>
         </Link>
 
