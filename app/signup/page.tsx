@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { SocialAuth } from '@/components/SocialAuth'
 import { DeviceAuthFrame } from '@/components/DeviceAuthFrame'
 import { theme } from '@/lib/theme'
 
@@ -155,6 +156,8 @@ export default function SignupPage() {
             {loading ? 'Creating Account...' : 'Create Account'}
           </button>
         </form>
+
+        <SocialAuth />
 
         <div style={{ textAlign: 'center', marginTop: '0.5rem', fontSize: '0.9rem', color: theme.text.secondary }}>
           Already have an account?{' '}

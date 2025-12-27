@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { SocialAuth } from '@/components/SocialAuth'
 import { DeviceAuthFrame } from '@/components/DeviceAuthFrame'
 import { theme } from '@/lib/theme'
 
@@ -141,6 +142,10 @@ export default function LoginPage() {
           {loading ? 'Authenticating...' : 'Sign In'}
         </button>
 
+
+
+        <SocialAuth />
+
         <div style={{ textAlign: 'center', marginTop: '1rem', fontSize: '0.9rem', color: theme.text.secondary }}>
           Don't have an account?{' '}
           <Link href="/signup" style={{ color: theme.accent.primary, textDecoration: 'none', fontWeight: 500 }}>
@@ -148,6 +153,6 @@ export default function LoginPage() {
           </Link>
         </div>
       </form>
-    </DeviceAuthFrame>
+    </DeviceAuthFrame >
   )
 }
