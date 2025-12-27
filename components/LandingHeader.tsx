@@ -145,7 +145,7 @@ export function LandingHeader() {
           }}>
             Pricing
           </Link>
-          <Link href="/why-testlattice" className="btn-shine" style={{
+          <Link href="/why-Rihario" className="btn-shine" style={{
             color: 'var(--maroon-800)', fontWeight: 600, fontSize: '0.95rem', textDecoration: 'none',
             padding: '0.5rem 1rem', background: 'var(--bg-tertiary)', borderRadius: '50px',
             border: '1px solid var(--accent-red-subtle)'

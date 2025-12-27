@@ -117,7 +117,7 @@ export default function FeaturesPage() {
                                 <SectionLabel text="AUTONOMOUS HEALING" />
                                 <h2 style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>Intelligence Engine</h2>
                                 <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '2rem', fontSize: '1.1rem' }}>
-                                    Your tests shouldn't break just because a CSS class changed. TestLattice uses a proprietary multimodal Large Action Model (LAM) to understand the semantic meaning of your UI.
+                                    Your tests shouldn't break just because a CSS class changed. Rihario uses a proprietary multimodal Large Action Model (LAM) to understand the semantic meaning of your UI.
                                 </p>
                                 <ul style={{ listStyle: 'none', padding: 0, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                     <CheckItem text="<strong>Self-Healing:</strong> Automatically fixes broken selectors in < 50ms." />
@@ -277,7 +277,7 @@ export default function FeaturesPage() {
             <footer style={{ background: 'var(--beige-100)', padding: '4rem 0 2rem' }}>
                 <div className="container">
                     <div style={{ borderTop: '1px solid var(--border-medium)', paddingTop: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                        © {new Date().getFullYear()} TestLattice Inc. All rights reserved.
+                        © {new Date().getFullYear()} Rihario Inc. All rights reserved.
                     </div>
                 </div>
             </footer>

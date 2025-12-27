@@ -276,7 +276,7 @@ export default function GuestTestRunPage() {
                         textDecoration: 'none',
                         letterSpacing: '-0.02em'
                     }}>
-                        🧪 TestLattice
+                        🧪 Rihario
                     </Link>
                     <div style={{ width: '1px', height: '24px', background: 'var(--beige-300)' }} />
                     <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>

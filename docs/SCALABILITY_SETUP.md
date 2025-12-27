@@ -82,7 +82,7 @@ For production with multiple API servers, configure your load balancer with **st
 
 ### Option 1: Nginx (Recommended)
 
-**File**: `/etc/nginx/sites-available/testlattice`
+**File**: `/etc/nginx/sites-available/Rihario`
 
 ```nginx
 upstream api_servers {
@@ -167,7 +167,7 @@ server {
 
 **Enable and restart**:
 ```bash
-sudo ln -s /etc/nginx/sites-available/testlattice /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/Rihario /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -206,7 +206,7 @@ sudo systemctl reload nginx
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: testlattice-api
+  name: Rihario-api
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-name: "api-sticky"
@@ -453,4 +453,3 @@ If you encounter issues:
 4. Review this guide's troubleshooting section
 
 For production issues, enable Sentry error tracking (see [SENTRY_SETUP.md](./SENTRY_SETUP.md))
-

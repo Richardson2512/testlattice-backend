@@ -33,8 +33,8 @@ AI-powered frontend testing platform with comprehensive UI testing capabilities.
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/Richardson2512/testlattice.git
-cd testlattice
+git clone https://github.com/Richardson2512/Rihario.git
+cd Rihario
 ```
 
 2. Install dependencies:

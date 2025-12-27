@@ -97,7 +97,7 @@ export async function sendToWebhook(
           ],
           timestamp: new Date().toISOString(),
           footer: {
-            text: 'TestLattice AI Testing Platform'
+            text: 'Rihario AI Testing Platform'
           }
         }]
       }
@@ -130,7 +130,7 @@ export function downloadReport(testRun: TestRun) {
   
   const logContent = [
     '╔══════════════════════════════════════════════════════════════════╗',
-    '║                    TestLattice Test Report                       ║',
+    '║                    Rihario Test Report                       ║',
     '╚══════════════════════════════════════════════════════════════════╝',
     '',
     '📊 EXECUTIVE SUMMARY',
@@ -167,14 +167,14 @@ export function downloadReport(testRun: TestRun) {
     '',
     '─────────────────────────────────────────────────────────────────',
     `Generated: ${new Date().toLocaleString()}`,
-    'Powered by TestLattice - AI Test Automation Platform',
+    'Powered by Rihario - AI Test Automation Platform',
   ].join('\n')
   
   const blob = new Blob([logContent], { type: 'text/plain; charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `testlattice-report-${testRun.id.substring(0, 8)}-${Date.now()}.txt`
+  a.download = `Rihario-report-${testRun.id.substring(0, 8)}-${Date.now()}.txt`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

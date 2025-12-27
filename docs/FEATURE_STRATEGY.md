@@ -1,4 +1,4 @@
-# TestLattice Feature Strategy
+# Rihario Feature Strategy
 ## Vibe Testing for Solo & Indie Developers
 
 ---
@@ -224,7 +224,7 @@
 
 **For Solo & Indie Developers**
 
-**TestLattice helps you feel confident before shipping.**
+**Rihario helps you feel confident before shipping.**
 
 No test suites. No code. No maintenance.
 
@@ -274,4 +274,3 @@ Just point our AI at your app and watch it explore. See if anything feels broken
 
 **Last Updated:** 2024
 **Product Philosophy:** Confidence over coverage. Exploration over execution. Human-in-the-loop over full automation.
-

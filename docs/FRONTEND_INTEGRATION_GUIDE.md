@@ -2,7 +2,7 @@
 
 ## 📋 **Overview**
 
-This guide shows how to integrate all newly implemented backend features into your TestLattice frontend (https://github.com/Richardson2512/testlattice.git).
+This guide shows how to integrate all newly implemented backend features into your Rihario frontend (https://github.com/Richardson2512/Rihario.git).
 
 ---
 
@@ -1272,14 +1272,14 @@ export function TestRunPage({ runId }: { runId: string }) {
 
 ```bash
 # 1. Clone frontend repo
-git clone https://github.com/Richardson2512/testlattice.git
-cd testlattice
+git clone https://github.com/Richardson2512/Rihario.git
+cd Rihario
 
 # 2. Install dependencies
 npm install
 
 # 3. Update types (copy from backend)
-cp ../testlattice-backend/api/src/types/index.ts src/types/api-types.ts
+cp ../Rihario-backend/api/src/types/index.ts src/types/api-types.ts
 
 # 4. Add new components
 # - DeviceProfileSelector.tsx
@@ -1497,7 +1497,7 @@ Cross-Browser Test Results
 
 ```bash
 # 1. Clone frontend repo
-git clone https://github.com/Richardson2512/testlattice.git
+git clone https://github.com/Richardson2512/Rihario.git
 
 # 2. Follow this guide to add:
 - DeviceProfileSelector component
@@ -1514,4 +1514,3 @@ npm run build
 ```
 
 **All code examples are provided above - ready to copy/paste! 🚀**
-

@@ -51,7 +51,7 @@ export default function ParallelCrossBrowserTestingPage() {
               </p>
               <ol style={{ marginLeft: '1.5rem', marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>
                 <li style={{ marginBottom: '0.75rem' }}>You select which browsers to test (Chrome, Firefox, Safari)</li>
-                <li style={{ marginBottom: '0.75rem' }}>TestLattice creates separate jobs for each browser</li>
+                <li style={{ marginBottom: '0.75rem' }}>Rihario creates separate jobs for each browser</li>
                 <li style={{ marginBottom: '0.75rem' }}>Each browser runs the <strong>same test</strong> in parallel</li>
                 <li style={{ marginBottom: '0.75rem' }}>You get separate results for each browser</li>
                 <li style={{ marginBottom: '0.75rem' }}>Results are clearly labeled by browser (e.g., "Chrome results", "Firefox results")</li>
@@ -65,7 +65,7 @@ export default function ParallelCrossBrowserTestingPage() {
               }}>
                 <strong style={{ color: 'var(--text-primary)' }}>Example:</strong>
                 <p style={{ marginTop: '0.5rem', color: 'var(--text-secondary)' }}>
-                  You run a login flow test with Chrome, Firefox, and Safari selected. TestLattice executes the same login steps in all three browsers simultaneously. You see three separate result sets, each showing how the login flow behaved in that specific browser.
+                  You run a login flow test with Chrome, Firefox, and Safari selected. Rihario executes the same login steps in all three browsers simultaneously. You see three separate result sets, each showing how the login flow behaved in that specific browser.
                 </p>
               </div>
             </section>

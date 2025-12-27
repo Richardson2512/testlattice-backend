@@ -1,4 +1,4 @@
-# 🚀 TestLattice Frontend - Quick Start Guide
+# 🚀 Rihario Frontend - Quick Start Guide
 
 ## ✅ Implementation Complete!
 
@@ -219,7 +219,7 @@ testRun.summary // Summary statistics
 ## 📁 File Structure
 
 ```
-testlattice-main/
+Rihario-main/
 ├── components/
 │   ├── DeviceProfileSelector.tsx    ← NEW
 │   ├── BrowserMatrixSelector.tsx    ← NEW
@@ -261,19 +261,19 @@ testlattice-main/
 ### To Start Using:
 1. **Start the API server** (port 3001)
    ```bash
-   cd testlattice-backend-main/api
+   cd Rihario-backend-main/api
    npm start
    ```
 
 2. **Start the worker** (for test execution)
    ```bash
-   cd testlattice-backend-main/worker
+   cd Rihario-backend-main/worker
    npm start
    ```
 
 3. **Start the frontend** (port 3000)
    ```bash
-   cd testlattice-main
+   cd Rihario-main
    npm run dev
    ```
 
@@ -335,4 +335,3 @@ For issues or questions:
 **Last Updated:** December 4, 2024  
 **Version:** 1.0.0  
 **Status:** ✅ Production Ready
-

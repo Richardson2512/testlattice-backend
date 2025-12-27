@@ -21,7 +21,7 @@ const features: FeatureSlide[] = [
         color: '#10b981', // green
         content: (
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }}>$ npx testlattice run</div>
+                <div style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }}>$ npx Rihario run</div>
                 <div style={{ color: 'var(--success)', marginBottom: '0.25rem' }}>✓ Initializing AI Agent...</div>
 
                 {/* Standard Steps */}
@@ -175,7 +175,7 @@ const features: FeatureSlide[] = [
                     <div style={{ color: '#3b82f6', paddingLeft: '2rem', marginBottom: '0.25rem' }}>test-lattice:</div>
                     <div style={{ paddingLeft: '3rem', color: 'var(--text-primary)' }}>runs-on: ubuntu-latest</div>
                     <div style={{ paddingLeft: '3rem', color: 'var(--text-primary)' }}>steps:</div>
-                    <div style={{ paddingLeft: '4rem', color: '#10b981' }}>- uses: testlattice/action@v2</div>
+                    <div style={{ paddingLeft: '4rem', color: '#10b981' }}>- uses: Rihario/action@v2</div>
                 </div>
 
                 {/* Pipeline Status */}
@@ -196,7 +196,7 @@ const features: FeatureSlide[] = [
                             <span style={{ position: 'absolute', inset: '25%', borderRadius: '50%', background: '#3b82f6' }} />
                         </div>
                         <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>E2E Tests (TestLattice)</div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>E2E Tests (Rihario)</div>
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Running 245 tests...</div>
                         </div>
                         <div style={{ fontSize: '0.8rem', color: '#3b82f6' }}>14s</div>

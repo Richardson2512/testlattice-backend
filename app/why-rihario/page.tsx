@@ -24,7 +24,7 @@ const tocSections = [
     { id: 'trust', text: 'Why trust Rihario?' },
 ]
 
-export default function WhyTestLattice() {
+export default function WhyRihario() {
     return (
         <main style={{ minHeight: '100vh', background: theme.bg.primary }}>
             <LandingHeader />
@@ -136,7 +136,7 @@ export default function WhyTestLattice() {
                     <section id="why-not-playwright" style={{ marginBottom: '5rem' }}>
                         <h2 style={{ fontSize: '2.5rem', marginBottom: '1.5rem' }}>Why Rihario Instead of Playwright?</h2>
                         <p style={{ fontSize: '1.1rem', lineHeight: 1.6, marginBottom: '2rem', color: theme.text.secondary }}>
-                            <strong>Quick answer:</strong> Because Playwright requires coding. TestLattice doesn't.
+                            <strong>Quick answer:</strong> Because Playwright requires coding. Rihario doesn't.
                         </p>
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>

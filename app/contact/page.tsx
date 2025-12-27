@@ -36,19 +36,19 @@ export default function ContactPage() {
                                 icon="📧"
                                 title="Email Us"
                                 desc="For general inquiries and support."
-                                action="support@testlattice.com"
+                                action="support@Rihario.com"
                             />
                             <ContactInfoBlock
                                 icon="💼"
                                 title="Enterprise Sales"
                                 desc="For high-volume custom contracts."
-                                action="sales@testlattice.com"
+                                action="sales@Rihario.com"
                             />
                             <ContactInfoBlock
                                 icon="💬"
                                 title="Community"
                                 desc="Join our Discord for real-time help."
-                                action="discord.gg/testlattice"
+                                action="discord.gg/Rihario"
                             />
                         </div>
                     </div>

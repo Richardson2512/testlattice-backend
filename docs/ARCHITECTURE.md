@@ -1,6 +1,6 @@
-# TestLattice - Architecture Documentation
+# Rihario - Architecture Documentation
 
-This document describes the complete architecture of the TestLattice platform.
+This document describes the complete architecture of the Rihario platform.
 
 ## Architecture Diagram
 
@@ -209,4 +209,3 @@ while(true) {
 - **Test Latency**: Measure end-to-end test execution time
 - **Cost Metrics**: Track OpenAI, Pinecone, and runner costs
 - **Error Rates**: Monitor failures and retry attempts
-

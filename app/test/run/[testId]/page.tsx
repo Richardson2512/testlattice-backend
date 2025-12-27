@@ -442,7 +442,7 @@ export default function TestRunPage() {
         fontWeight: 500,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <span>◈ TestLattice</span>
+          <span>◈ Rihario</span>
           <span style={{ opacity: 0.7 }}>|</span>
           <span>Run ID: {testId.slice(0, 12)}</span>
         </div>

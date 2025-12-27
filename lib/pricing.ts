@@ -50,7 +50,7 @@ export const PRICING_TIERS: Record<PricingTier, PricingTierInfo> = {
     name: 'Free',
     price: 0,
     priceLabel: '$0',
-    description: 'Perfect for trying out TestLattice',
+    description: 'Perfect for trying out Rihario',
     limits: {
       totalTestsPerMonth: 3,
       maxVisualTests: 1,
