@@ -1,0 +1,10 @@
+{
+    "url": "https://www.certinal.com/",
+    "testType": "navigation",
+    "build": {
+        "type": "web"
+    },
+    "profile": {
+        "device": "CHROME_LATEST"
+    }
+}

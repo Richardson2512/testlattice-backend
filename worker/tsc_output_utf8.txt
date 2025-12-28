@@ -1,0 +1,68 @@
+﻿src/executors/testExecutor.ts(200,11): error TS2322: Type '"clicked" | "typed" | "analyzed" | "healed"' is not assignable to type '"failed" | "clicked" | "typed" | "analyzed" | undefined'.
+  Type '"healed"' is not assignable to type '"failed" | "clicked" | "typed" | "analyzed" | undefined'.
+src/instrument.ts(14,7): error TS2353: Object literal may only specify known properties, and 'enableLogs' does not exist in type 'NodeOptions'.
+src/processors/flows/RegisteredFlow.ts(2,34): error TS2305: Module '"../../types"' has no exported member 'ProcessResult'.
+src/processors/testProcessor.ts(30,39): error TS2459: Module '"../services/comprehensiveTesting"' declares 'ComprehensiveTestResults' locally, but it is not exported.
+src/processors/testProcessor.ts(257,9): error TS2353: Object literal may only specify known properties, and 'pageUrl' does not exist in type '{ totalElements: number; interactiveElements: number; hiddenElements: number; truncated: boolean; timestamp: string; }'.
+src/processors/testProcessor.ts(266,7): error TS2322: Type 'VisionContext' is not assignable to type '{ elements: never[]; }'.
+  Types of property 'elements' are incompatible.
+    Type 'VisionElement[]' is not assignable to type 'never[]'.
+      Type 'VisionElement' is not assignable to type 'never'.
+src/processors/testProcessor.ts(278,55): error TS2339: Property 'selector' does not exist on type 'never'.
+src/processors/testProcessor.ts(279,32): error TS2698: Spread types may only be created from object types.
+src/processors/testProcessor.ts(328,60): error TS7006: Parameter 'comp' implicitly has an 'any' type.
+src/processors/testProcessor.ts(328,66): error TS7006: Parameter 'idx' implicitly has an 'any' type.
+src/processors/testProcessor.ts(342,32): error TS2551: Property 'getTestDataStore' does not exist on type 'TestProcessor'. Did you mean 'testDataStores'?
+src/processors/testProcessor.ts(351,65): error TS2353: Object literal may only specify known properties, and 'encoding' does not exist in type 'PageScreenshotOptions'.
+src/processors/testProcessor.ts(352,28): error TS2352: Conversion of type 'Buffer<ArrayBufferLike>' to type 'string' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+src/processors/testProcessor.ts(477,30): error TS2304: Cannot find name 'jobData'.
+src/processors/testProcessor.ts(477,55): error TS2304: Cannot find name 'jobData'.
+src/processors/testProcessor.ts(2621,73): error TS7006: Parameter 'sel' implicitly has an 'any' type.
+src/processors/testProcessor.ts(2673,67): error TS2339: Property 'elementId' does not exist on type 'VisionElement'.
+src/processors/testProcessor.ts(2834,60): error TS2554: Expected 0 arguments, but got 1.
+src/processors/testProcessor.ts(2885,30): error TS2304: Cannot find name 'previousActionFailed'.
+src/processors/testProcessor.ts(2994,66): error TS7006: Parameter 'e' implicitly has an 'any' type.
+src/processors/testProcessor.ts(2999,66): error TS7006: Parameter 'e' implicitly has an 'any' type.
+src/processors/testProcessor.ts(3008,72): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/processors/types.ts(13,8): error TS2307: Cannot find module '../../types' or its corresponding type declarations.
+src/processors/types.ts(14,36): error TS2307: Cannot find module '../../runners/playwright' or its corresponding type declarations.
+src/runners/appium.ts(2,18): error TS2305: Module '"webdriverio"' has no exported member 'RemoteOptions'.
+src/runners/appium.ts(11,12): error TS2315: Type 'Browser' is not generic.
+src/runners/appium.ts(258,37): error TS2315: Type 'Browser' is not generic.
+src/runners/playwright/actions/interaction.ts(82,32): error TS7006: Parameter 'x' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(82,35): error TS7006: Parameter 'y' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(86,23): error TS2554: Expected 1-2 arguments, but got 3.
+src/runners/playwright/actions/interaction.ts(123,36): error TS7006: Parameter 'x' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(123,39): error TS7006: Parameter 'y' implicitly has an 'any' type.
+src/runners/playwright/actions/interaction.ts(127,27): error TS2554: Expected 1-2 arguments, but got 3.
+src/services/enhancedTestability.ts(356,9): error TS2322: Type '{ name: string; confidence: number; warnings: { type: string; message: string; suggestion: string; }[]; }[]' is not assignable to type 'string[]'.
+  Type '{ name: string; confidence: number; warnings: { type: string; message: string; suggestion: string; }[]; }' is not assignable to type 'string'.
+src/services/enhancedTestability.ts(370,9): error TS2322: Type '{ name: string; blockers: { type: string; message: string; suggestion: string; }[]; }[]' is not assignable to type 'string[]'.
+  Type '{ name: string; blockers: { type: string; message: string; suggestion: string; }[]; }' is not assignable to type 'string'.
+src/services/intelligentRetryLayer.ts(333,86): error TS2554: Expected 0 arguments, but got 1.
+src/services/learningService.ts(14,10): error TS2305: Module '"../types"' has no exported member 'HeuristicRecord'.
+src/services/learningService.ts(14,27): error TS2305: Module '"../types"' has no exported member 'SemanticAnchors'.
+src/services/learningService.ts(14,44): error TS2305: Module '"../types"' has no exported member 'GodModeInteraction'.
+src/services/learningService.ts(34,8): error TS7006: Parameter 'sel' implicitly has an 'any' type.
+src/services/learningService.ts(34,13): error TS7006: Parameter 'coords' implicitly has an 'any' type.
+src/services/learningService.ts(82,7): error TS2554: Expected 1-2 arguments, but got 3.
+src/services/learningService.ts(86,47): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'BinaryLike'.
+src/services/learningService.ts(102,8): error TS7006: Parameter 'sel' implicitly has an 'any' type.
+src/services/learningService.ts(102,13): error TS7006: Parameter 'coords' implicitly has an 'any' type.
+src/services/learningService.ts(159,65): error TS2304: Cannot find name 'tag'.
+src/services/learningService.ts(164,7): error TS2554: Expected 1-2 arguments, but got 3.
+src/services/learningService.ts(167,32): error TS18046: 'extracted' is of type 'unknown'.
+src/services/learningService.ts(168,32): error TS18046: 'extracted' is of type 'unknown'.
+src/services/storage.ts(55,21): error TS2769: No overload matches this call.
+  Overload 1 of 4, '(arrayBuffer: WithImplicitCoercion<ArrayBufferLike>, byteOffset?: number | undefined, length?: number | undefined): Buffer<ArrayBufferLike>', gave the following error.
+    Argument of type 'string | Buffer<ArrayBufferLike>' is not assignable to parameter of type 'WithImplicitCoercion<ArrayBufferLike>'.
+      Type 'string' is not assignable to type 'WithImplicitCoercion<ArrayBufferLike>'.
+  Overload 2 of 4, '(string: WithImplicitCoercion<string>, encoding?: BufferEncoding | undefined): Buffer<ArrayBuffer>', gave the following error.
+    Argument of type 'string | Buffer<ArrayBufferLike>' is not assignable to parameter of type 'WithImplicitCoercion<string>'.
+      Type 'Buffer<ArrayBufferLike>' is not assignable to type 'WithImplicitCoercion<string>'.
+        Type 'Buffer<ArrayBufferLike>' is not assignable to type '{ valueOf(): string; }'.
+          The types returned by 'valueOf()' are incompatible between these types.
+            Type 'Buffer<ArrayBufferLike>' is not assignable to type 'string'.
+src/synthesizers/contextSynthesizer.ts(4,39): error TS2459: Module '"../services/comprehensiveTesting"' declares 'ComprehensiveTestResults' locally, but it is not exported.
+src/synthesizers/contextSynthesizer.ts(189,47): error TS2339: Property 'toLowerCase' does not exist on type 'string | { baseVal: string; }'.
+  Property 'toLowerCase' does not exist on type '{ baseVal: string; }'.

@@ -1,0 +1,630 @@
+// IMPORTANT: Load environment variables FIRST, before any other imports
+// Use require for dotenv to ensure it loads synchronously before any ES6 imports
+const dotenv = require('dotenv')
+const path = require('path')
+
+// Load .env file from worker directory
+// When running with `npm run dev` from worker/, process.cwd() is worker/
+const envPath = path.resolve(process.cwd(), '.env')
+const result = dotenv.config({ path: envPath })
+
+// Log for debugging
+if (process.env.NODE_ENV === 'development') {
+  console.log('Loading .env from:', envPath)
+  if (result.error) {
+    console.error('❌ Error loading .env:', result.error.message)
+  } else {
+    console.log('✅ .env file loaded successfully')
+  }
+  console.log('PINECONE_API_KEY:', process.env.PINECONE_API_KEY ? '✅ Set' : '❌ Missing')
+  console.log('REDIS_URL:', process.env.REDIS_URL ? '✅ Set' : '❌ Missing')
+  console.log('OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✅ Set' : '❌ Missing')
+}
+
+// IMPORTANT: Import Sentry instrument second, after env vars are loaded
+import './instrument'
+
+import { Worker } from 'bullmq'
+import IORedis from 'ioredis'
+import * as Sentry from '@sentry/node'
+import { config } from './config/env'
+import { logger } from './utils/logger'
+import { JobData, TestRunStatus } from './types'
+import { UnifiedBrainService } from './services/unifiedBrainService'
+import { StorageService } from './services/storage'
+import { PineconeService } from './services/pinecone'
+import { PlaywrightRunner } from './runners/playwright'
+import { AppiumRunner } from './runners/appium'
+import { TestProcessor } from './processors/testProcessor'
+import { VisionValidatorService } from './services/visionValidator'
+
+// Redis connection with error handling
+// Read directly from process.env first (after dotenv loads) to avoid config caching
+const redisUrl = process.env.REDIS_URL || config.redis.url || 'redis://localhost:6379'
+
+logger.info(`📡 Connecting to Redis: ${redisUrl.replace(/:[^:@]+@/, ':****@')}`) // Hide password in logs
+
+const connection = new IORedis(redisUrl, {
+  maxRetriesPerRequest: null,
+  retryStrategy: (times: number) => {
+    if (times < 3) {
+      const delay = Math.min(times * 200, 2000)
+      logger.warn(`🔄 Redis retry attempt ${times}/3 (waiting ${delay}ms)...`)
+      return delay
+    }
+    logger.error('❌ Redis connection failed after 3 retries.')
+    logger.error('💡 Please check:')
+    logger.error(`   1. Redis is running at: ${redisUrl.replace(/:[^:@]+@/, ':****@')}`)
+    logger.error('   2. REDIS_URL in worker/.env is correct')
+    logger.error('   3. Redis server is accessible from this machine')
+    logger.error('   4. Firewall/network allows connection to Redis')
+    return null
+  },
+  reconnectOnError: (err: Error) => {
+    const targetError = 'READONLY'
+    if (err.message.includes(targetError)) {
+      return true
+    }
+    return false
+  },
+  lazyConnect: true, // Don't auto-connect, we'll connect manually
+  enableOfflineQueue: false, // Don't queue commands when offline
+})
+
+connection.on('connect', () => {
+  logger.info('✅ Redis connected')
+})
+
+connection.on('error', (err: Error) => {
+  logger.error({ err: err.message }, '❌ Redis connection error')
+  if (err.message.includes('ECONNREFUSED')) {
+    logger.error('💡 Redis server is not running or not accessible')
+  } else if (err.message.includes('ENOTFOUND')) {
+    logger.error('💡 Redis hostname could not be resolved')
+  } else if (err.message.includes('ETIMEDOUT')) {
+    logger.error('💡 Redis connection timed out - check network/firewall')
+  }
+})
+
+connection.on('ready', () => {
+  logger.info('✅ Redis ready')
+})
+
+connection.on('close', () => {
+  logger.warn('⚠️  Redis connection closed')
+})
+
+connection.on('reconnecting', (delay: number) => {
+  logger.warn(`🔄 Redis reconnecting in ${delay}ms...`)
+})
+
+// Initialize Unified Brain Service for GUEST tests (GPT-5 Mini)
+// Uses OPENAI_API_KEY - token tracking labeled as [Guest]
+const guestBrain = new UnifiedBrainService()
+logger.info('✅ Guest Brain Service initialized (GPT-5 Mini, OPENAI_API_KEY)')
+
+// Initialize Unified Brain Service for REGISTERED tests (GPT-5 Mini)
+// Uses OPENAI_API_KEY_REGISTERED for separate rate limits and cost tracking
+let registeredBrain: UnifiedBrainService
+const registeredApiKey = process.env.OPENAI_API_KEY_REGISTERED
+if (registeredApiKey) {
+  // Temporarily swap API key for registered brain initialization
+  const originalKey = process.env.OPENAI_API_KEY
+  process.env.OPENAI_API_KEY = registeredApiKey
+  registeredBrain = new UnifiedBrainService()
+  process.env.OPENAI_API_KEY = originalKey // Restore
+  logger.info('✅ Registered Brain Service initialized (GPT-5 Mini, OPENAI_API_KEY_REGISTERED)')
+} else {
+  // Fall back to guest brain if no separate key
+  logger.info('ℹ️  OPENAI_API_KEY_REGISTERED not set, using same brain for both test types')
+  registeredBrain = guestBrain
+}
+
+// Initialize storage service with Supabase configuration
+// IMPORTANT: Use SERVICE_ROLE_KEY for storage operations to bypass RLS policies
+// Uses config which validates env vars at startup
+const supabaseUrl = config.supabase.url
+// Worker MUST use service role key for storage uploads (bypasses RLS)
+// Storage policies require service_role for INSERT operations
+const supabaseServiceRoleKey = config.supabase.serviceRoleKey
+const supabaseAnonKey = config.supabase.storageKey || config.supabase.serviceRoleKey
+const supabaseBucket = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts'
+
+// Use service role key (required for storage), fall back to anon key only if service role not available
+// Use service role key (required for storage), fall back to anon key only if service role not available
+const storageKey = supabaseServiceRoleKey || supabaseAnonKey
+
+// Initialize Wasabi storage for heavy artifacts (videos, screenshots, traces)
+import { createWasabiStorage, WasabiStorageService } from './services/wasabiStorage'
+import { createTraceService, TraceService } from './services/traceService'
+
+let wasabiStorage: WasabiStorageService | null = null
+let traceService: TraceService
+
+if (config.wasabi.enabled) {
+  wasabiStorage = createWasabiStorage()
+  if (wasabiStorage) {
+    logger.info('✅ Wasabi storage initialized (videos, screenshots, traces)')
+  }
+} else {
+  logger.info('ℹ️  Wasabi storage disabled (using Supabase for all artifacts)')
+}
+
+// Pass wasabiStorage to StorageService (facade)
+const storageService = new StorageService(supabaseUrl, storageKey, supabaseBucket, wasabiStorage)
+
+traceService = createTraceService(wasabiStorage)
+logger.info('✅ TraceService initialized')
+
+// Export for use in processors
+export { wasabiStorage, traceService }
+
+// Lazy Pinecone initialization - only create if API key is available
+// Read directly from process.env to avoid config module caching issues
+let pineconeService: PineconeService | null = null
+function getPineconeService(): PineconeService | null {
+  const apiKey = process.env.PINECONE_API_KEY || config.pinecone.apiKey
+  const indexName = process.env.PINECONE_INDEX_NAME || config.pinecone.indexName || 'Rihario'
+
+  if (!pineconeService && apiKey) {
+    try {
+      pineconeService = new PineconeService(apiKey, indexName)
+      // Initialize Pinecone connection (async, non-blocking)
+      pineconeService.initialize().catch((err) => {
+        logger.warn({ err: err.message }, '⚠️  Pinecone initialization failed (optional service)')
+        pineconeService = null // Reset on failure
+      })
+    } catch (error: any) {
+      // Silent - Pinecone is optional
+      return null
+    }
+  }
+  return pineconeService
+}
+const playwrightRunner = new PlaywrightRunner(config.testRunners.playwrightGridUrl)
+// Appium is disabled by default - set ENABLE_APPIUM=true to enable
+const appiumRunner = config.testRunners.appiumEnabled
+  ? new AppiumRunner(config.testRunners.appiumUrl)
+  : null
+
+// Optional vision validator (OpenAI GPT-4o with selective usage)
+let visionValidatorService: VisionValidatorService | null = null
+const visionApiKey = process.env.OPENAI_API_KEY || process.env.VISION_API_KEY || ''
+if (visionApiKey) {
+  try {
+    visionValidatorService = new VisionValidatorService(
+      visionApiKey,
+      config.vision.model,
+      undefined, // endpoint (uses default)
+      config.vision.interval,
+      config.vision.onError,
+      config.vision.onIRLFallback
+    )
+    logger.info(`✅ Vision validator ready (model: ${config.vision.model}, selective usage enabled)`)
+    logger.info(`   Interval: every ${config.vision.interval} steps, on errors: ${config.vision.onError}, on IRL fallback: ${config.vision.onIRLFallback}`)
+  } catch (error: any) {
+    logger.warn({ err: error.message }, '⚠️  Failed to initialize vision validator')
+    visionValidatorService = null
+  }
+} else {
+  logger.info('ℹ️  Vision validator disabled (OPENAI_API_KEY not configured)')
+  logger.info('   Note: Set OPENAI_API_KEY to enable GPT-4o vision (selective usage)')
+}
+
+// Create test processor for registered users (full diagnosis + execution)
+// Uses SEPARATE brain with OPENAI_API_KEY_REGISTERED for isolated billing
+// AppiumRunner is nullable - mobile tests will be rejected if Appium is disabled
+const testProcessor = new TestProcessor(
+  registeredBrain, // Separate brain for registered tests
+  storageService,
+  getPineconeService(), // Use lazy getter - will return null if API key not available
+  playwrightRunner,
+  appiumRunner, // Can be null if Appium is disabled
+  visionValidatorService,
+  config.vision.validatorInterval
+)
+
+// Create guest test processor (no diagnosis, simplified flow)
+// Uses SEPARATE brain with OPENAI_API_KEY for isolated billing
+import { GuestTestProcessor } from './processors/GuestTestProcessor'
+const guestProcessor = new GuestTestProcessor(
+  guestBrain, // Separate brain for guest tests
+  storageService,
+  playwrightRunner
+)
+console.log('✅ Guest Test Processor initialized (skip diagnosis, 25-step limit)')
+
+import { BehaviorProcessor } from './processors/behaviorProcessor'
+const behaviorProcessor = new BehaviorProcessor(registeredBrain)
+logger.info('✅ Behavior Processor initialized')
+
+// Worker processor
+async function processTestJob(jobData: JobData) {
+  const { runId, options } = jobData
+
+  // Route guest tests to dedicated processor
+  if (options?.isGuestRun || options?.testMode === 'guest') {
+    logger.info({ runId }, '🎯 Routing to Guest Test Processor (no diagnosis)')
+    return await guestProcessor.process(jobData)
+  }
+
+  if (options?.testMode === 'behavior') {
+    logger.info({ runId }, '🎯 Routing to Behavior Processor')
+    return await behaviorProcessor.process(jobData)
+  }
+
+  logger.info({ runId, type: jobData.build.type, device: jobData.profile.device }, 'Processing test job')
+
+  try {
+    // Process test run
+    const result = await testProcessor.process(jobData)
+
+    // If we're waiting for approval, don't mark the run as completed yet
+    if (result.stage === 'diagnosis') {
+      logger.info({ runId }, 'Diagnosis finished. Awaiting user approval before execution.')
+      return {
+        success: true,
+        runId,
+        steps: result.steps.length,
+        artifacts: result.artifacts.length,
+        stage: 'diagnosis',
+      }
+    }
+
+    // Update test run status via API
+    const apiUrl = config.api.url || process.env.API_URL || 'http://localhost:3001'
+    const updateStatus = result.success ? TestRunStatus.COMPLETED : TestRunStatus.FAILED
+
+    try {
+      const fetch = (await import('node-fetch')).default
+      await fetch(`${apiUrl}/api/tests/${runId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: updateStatus,
+          steps: result.steps,
+          completedAt: new Date().toISOString(),
+        }),
+      })
+    } catch (apiError) {
+      logger.error({ runId, err: apiError }, 'Failed to update API')
+    }
+
+    logger.info({
+      runId,
+      status: result.success ? 'completed' : 'failed',
+      steps: result.steps.length,
+      artifacts: result.artifacts.length,
+    }, `Test run ${result.success ? 'completed' : 'failed'}`)
+
+    return {
+      success: result.success,
+      runId,
+      steps: result.steps.length,
+      artifacts: result.artifacts.length,
+      stage: 'execution',
+    }
+  } catch (error: any) {
+    logger.error({ runId, err: error }, 'Test job failed')
+
+    // Capture error in Sentry (if configured)
+    if (config.sentry.dsn) {
+      try {
+        Sentry.captureException(error, {
+          tags: {
+            runId,
+            buildType: jobData.build.type,
+            device: jobData.profile.device,
+          },
+          extra: {
+            runId,
+            projectId: jobData.projectId,
+            build: jobData.build,
+            profile: jobData.profile,
+          },
+        })
+      } catch (sentryError) {
+        // Sentry capture failed, but don't fail the job
+        logger.warn({ err: sentryError }, 'Failed to capture error in Sentry')
+      }
+    }
+
+    // Update test run status to failed
+    const apiUrl = process.env.API_URL || 'http://localhost:3001'
+    try {
+      const fetch = (await import('node-fetch')).default
+      await fetch(`${apiUrl}/api/tests/${runId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: TestRunStatus.FAILED,
+          error: error.message,
+          completedAt: new Date().toISOString(),
+        }),
+      })
+    } catch (apiError) {
+      logger.error({ runId, err: apiError }, 'Failed to update API')
+      if (config.sentry.dsn) {
+        try {
+          Sentry.captureException(apiError, {
+            tags: { runId, errorType: 'api_update_failed' },
+          })
+        } catch (sentryError) {
+          // Sentry capture failed, but don't fail the job
+          logger.warn({ err: sentryError }, 'Failed to capture error in Sentry')
+        }
+      }
+    }
+
+    throw error
+  }
+}
+
+// Create worker with error handling
+let worker: Worker<JobData>
+try {
+  worker = new Worker<JobData>(
+    'test-runner',
+    async (job: any) => {
+      return await processTestJob(job.data)
+    },
+    {
+      connection,
+      concurrency: config.worker.concurrency || 5,
+    }
+  )
+
+  console.log('✅ Main worker (test-runner) created successfully')
+} catch (error: any) {
+  logger.error({ err: error.message }, '❌ Failed to create main worker')
+  process.exit(1)
+}
+
+// Create separate guest worker for guest-runner queue
+// This provides isolation from main test processing
+let guestWorker: Worker<JobData> | undefined
+try {
+  guestWorker = new Worker<JobData>(
+    'guest-runner',
+    async (job: any) => {
+      logger.info({ runId: job.data.runId }, '🎯 Guest worker processing job')
+      return await guestProcessor.process(job.data)
+    },
+    {
+      connection,
+      concurrency: 3, // Lower concurrency for guest tests
+    }
+  )
+
+  logger.info('✅ Guest worker (guest-runner) created successfully')
+} catch (error: any) {
+  logger.error({ err: error.message }, '❌ Failed to create guest worker')
+  // Don't exit - main worker can still run
+  logger.warn('⚠️  Guest tests will not be processed')
+}
+
+// Main worker event handlers
+worker.on('completed', (job: any) => {
+  logger.info({ jobId: job.id }, '✓ Main job completed successfully')
+})
+
+worker.on('failed', (job: any, err: Error) => {
+  logger.error({ jobId: job?.id, err: err?.message }, '✗ Main job failed')
+})
+
+worker.on('active', (job: any) => {
+  logger.info({ jobId: job.id }, '→ Main job started processing')
+})
+
+// Guest worker event handlers
+if (guestWorker) {
+  guestWorker.on('completed', (job: any) => {
+    logger.info({ jobId: job.id }, '✓ Guest job completed successfully')
+  })
+
+  guestWorker.on('failed', (job: any, err: Error) => {
+    logger.error({ jobId: job?.id, err: err?.message }, '✗ Guest job failed')
+  })
+
+  guestWorker.on('active', (job: any) => {
+    logger.info({ jobId: job.id }, '→ Guest job started processing')
+  })
+}
+
+// Graceful shutdown - close both workers
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received, shutting down gracefully')
+  await worker.close()
+  if (guestWorker) await guestWorker.close()
+  await connection.quit()
+  process.exit(0)
+})
+
+process.on('SIGINT', async () => {
+  logger.info('SIGINT received, shutting down gracefully')
+  await worker.close()
+  if (guestWorker) await guestWorker.close()
+  await connection.quit()
+  process.exit(0)
+})
+
+// Connect to Redis and verify before starting worker
+async function startWorker() {
+  try {
+    // Check connection status before connecting
+    const status = connection.status
+    if (status === 'ready' || status === 'connecting') {
+      // Connection already established or in progress
+      if (status === 'ready') {
+        logger.info('✅ Redis connection already established')
+      } else {
+        // Wait for connection to complete
+        logger.info('⏳ Waiting for Redis connection to complete...')
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Redis connection timeout'))
+          }, 10000) // 10 second timeout
+
+          const onReady = () => {
+            clearTimeout(timeout)
+            connection.removeListener('error', onError)
+            resolve()
+          }
+
+          const onError = (err: Error) => {
+            clearTimeout(timeout)
+            connection.removeListener('ready', onReady)
+            reject(err)
+          }
+
+          if (connection.status === 'ready') {
+            clearTimeout(timeout)
+            resolve()
+          } else {
+            connection.once('ready', onReady)
+            connection.once('error', onError)
+          }
+        })
+      }
+    } else {
+      // Connect to Redis
+      try {
+        await connection.connect()
+      } catch (connectErr: any) {
+        // Handle "already connecting/connected" error gracefully
+        if (connectErr.message.includes('already connecting') || connectErr.message.includes('already connected')) {
+          logger.info('⏳ Redis connection already in progress, waiting for completion...')
+          // Wait for connection to complete
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              reject(new Error('Redis connection timeout'))
+            }, 10000) // 10 second timeout
+
+            const onReady = () => {
+              clearTimeout(timeout)
+              connection.removeListener('error', onError)
+              resolve()
+            }
+
+            const onError = (err: Error) => {
+              clearTimeout(timeout)
+              connection.removeListener('ready', onReady)
+              reject(err)
+            }
+
+            if (connection.status === 'ready') {
+              clearTimeout(timeout)
+              resolve()
+            } else {
+              connection.once('ready', onReady)
+              connection.once('error', onError)
+            }
+          })
+        } else {
+          throw connectErr // Re-throw other errors
+        }
+      }
+    }
+
+    // Verify connection with ping
+    const pingResult = await connection.ping()
+    if (pingResult !== 'PONG') {
+      throw new Error('Redis ping returned unexpected result')
+    }
+
+    logger.info('✅ Redis ping successful')
+    logger.info('✅ Worker started, waiting for jobs...')
+    logger.info(`📊 Concurrency: ${config.worker.concurrency || 5}`)
+    logger.info(`🌐 Playwright Grid: ${config.testRunners.playwrightGridUrl || 'Not configured'}`)
+    if (config.testRunners.appiumEnabled) {
+      logger.info(`📱 Appium: ${config.testRunners.appiumUrl || 'Not configured'} (enabled)`)
+    } else {
+      logger.info(`📱 Appium: Disabled (set ENABLE_APPIUM=true to enable)`)
+    }
+    logger.info(`🔗 API URL: ${config.api.url || 'http://localhost:3001'}`)
+
+    // Log optional services status (check process.env directly to avoid config caching)
+    const pineconeApiKey = process.env.PINECONE_API_KEY || config.pinecone.apiKey
+    if (pineconeApiKey) {
+      logger.info('✅ Pinecone: Configured (will initialize on first use)')
+    } else {
+      logger.info('ℹ️  Pinecone: Not configured (optional)')
+    }
+
+    const sentryDsn = process.env.SENTRY_DSN || config.sentry.dsn
+    if (sentryDsn) {
+      logger.info('✅ Sentry: Configured')
+    } else {
+      logger.info('ℹ️  Sentry: Not configured (optional)')
+    }
+
+  } catch (err: any) {
+    if (err.message.includes('already connecting') || err.message.includes('already connected')) {
+      // Connection is already in progress, wait a bit and try ping
+      logger.info('⏳ Redis connection in progress, waiting...')
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      try {
+        const pingResult = await connection.ping()
+        if (pingResult === 'PONG') {
+          logger.info('✅ Redis connection established after wait')
+          // Continue with worker startup - re-run the success path
+          logger.info('✅ Redis ping successful')
+          logger.info('✅ Worker started, waiting for jobs...')
+          logger.info(`📊 Concurrency: ${config.worker.concurrency || 5}`)
+          logger.info(`🌐 Playwright Grid: ${config.testRunners.playwrightGridUrl || 'Not configured'}`)
+          if (config.testRunners.appiumEnabled) {
+            logger.info(`📱 Appium: ${config.testRunners.appiumUrl || 'Not configured'} (enabled)`)
+          } else {
+            logger.info(`📱 Appium: Disabled (set ENABLE_APPIUM=true to enable)`)
+          }
+          logger.info(`🔗 API URL: ${config.api.url || 'http://localhost:3001'}`)
+          const pineconeApiKeyRetry = process.env.PINECONE_API_KEY || config.pinecone.apiKey
+          if (pineconeApiKeyRetry) {
+            logger.info('✅ Pinecone: Configured (will initialize on first use)')
+          } else {
+            logger.info('ℹ️  Pinecone: Not configured (optional)')
+          }
+          const sentryDsnRetry = process.env.SENTRY_DSN || config.sentry.dsn
+          if (sentryDsnRetry) {
+            logger.info('✅ Sentry: Configured')
+          } else {
+            logger.info('ℹ️  Sentry: Not configured (optional)')
+          }
+          return // Success, exit function
+        } else {
+          throw new Error('Redis ping failed after wait')
+        }
+      } catch (pingErr: any) {
+        logger.error({ err: pingErr.message }, '❌ Redis connection failed after retry')
+        logger.error('❌ Worker cannot start without Redis connection')
+        logger.error('💡 Please check:')
+        logger.error(`   1. Redis is running at: ${redisUrl.replace(/:[^:@]+@/, ':****@')}`)
+        logger.error('   2. REDIS_URL in worker/.env is correct')
+        logger.error('   3. Redis server is accessible from this machine')
+        logger.error('   4. Firewall/network allows connection to Redis')
+        logger.error('   5. No other worker instances are running')
+        logger.error('')
+        logger.error('   To test Redis connection manually:')
+        logger.error(`   redis-cli -u ${redisUrl.replace(/:[^:@]+@/, ':****@')} ping`)
+        process.exit(1)
+      }
+    } else {
+      logger.error({ err: err.message }, '❌ Redis connection failed')
+      logger.error('❌ Worker cannot start without Redis connection')
+      logger.error('💡 Please check:')
+      logger.error(`   1. Redis is running at: ${redisUrl.replace(/:[^:@]+@/, ':****@')}`)
+      logger.error('   2. REDIS_URL in worker/.env is correct')
+      logger.error('   3. Redis server is accessible from this machine')
+      logger.error('   4. Firewall/network allows connection to Redis')
+      logger.error('   5. No other worker instances are running')
+      logger.error('')
+      logger.error('   To test Redis connection manually:')
+      logger.error(`   redis-cli -u ${redisUrl.replace(/:[^:@]+@/, ':****@')} ping`)
+      process.exit(1)
+    }
+  }
+}
+
+// Start worker
+startWorker()
+
