@@ -399,7 +399,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
             free: 3,
             starter: 100,
             indie: 300,
-            pro: 1000,
+            pro: 750,
           }
           const testsLimit = limitMap[tier] || 3
 
@@ -426,7 +426,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
           free: 3,
           starter: 100,
           indie: 300,
-          pro: 1000,
+          pro: 750,
         }
         const testsLimit = limitMap[tier] || 3
 

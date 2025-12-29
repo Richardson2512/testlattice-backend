@@ -2250,16 +2250,14 @@ ${parsedInstructions.structuredPlan}
         }
 
         const isMonkeyMode = options?.monkeyMode || options?.testMode === 'monkey'
-        const isGuestMode = options?.testMode === 'guest'
-        const guestTestType = options?.guestTestType as string | undefined
-        const guestCredentials = options?.guestCredentials as { username?: string; email?: string; password?: string } | undefined
+        const selectedTestTypes = options?.selectedTestTypes as string[] | undefined // Registered user multi-select
+        const testCredentials = options?.guestCredentials as { username?: string; email?: string; password?: string } | undefined // Shared credentials for login/signup tests
         const isAllPagesMode = options?.allPages || options?.testMode === 'all'
         const STEP_LIMITS = {
           single: { min: 15, max: 50, default: 15 },
           multi: { min: 25, max: 100, default: 25 },
           all: { min: 50, max: 150, default: 50 },
           monkey: { min: 25, max: 75, default: 25 },
-          guest: { min: 15, max: 25, default: 25 }, // Guest gets 25 steps max
         }
 
         if (isMonkeyMode) {
@@ -2267,37 +2265,51 @@ ${parsedInstructions.structuredPlan}
           console.log(`[${runId}] [${browserType.toUpperCase()}] 🐒 Monkey mode enabled - executing exploratory random interactions.`)
         }
 
-        // Guest test mode with specific flows
-        if (isGuestMode && guestTestType) {
-          console.log(`[${runId}] [${browserType.toUpperCase()}] 🎯 Guest test mode: ${guestTestType}`)
+        // REGISTERED USER: Execute selected test types (multi-select)
+        if (selectedTestTypes && selectedTestTypes.length > 0) {
+          console.log(`[${runId}] [${browserType.toUpperCase()}] 🎯 Registered user test with ${selectedTestTypes.length} test type(s): ${selectedTestTypes.join(', ')}`)
 
-          // Use provided credentials or fall back to demo defaults
-          const username = guestCredentials?.username || guestCredentials?.email || 'demo@example.com'
-          const password = guestCredentials?.password || 'DemoPass123!'
+          // Build comprehensive goal from selected test types
+          const testGoals: string[] = []
 
-          switch (guestTestType) {
-            case 'login':
-              goal = `AUTHENTICATION FLOW TESTING: First, detect and classify all authentication methods present (email+password, username+password, passwordless/magic link, SSO providers like Google/GitHub/Apple, MFA/OTP presence). DO NOT click SSO providers. DO NOT attempt to complete MFA/OTP. Then test negative paths: (1) Try submitting the login form with empty username/email field and verify error message appears and is visible. (2) Try submitting with empty password field and verify error message appears. (3) Try submitting with invalid credentials (use "invalid@test.com" and "wrongpass") and verify error message appears. After invalid attempts, check for UX issues: infinite loading spinners (>3s), disabled submit buttons, page reloads with no feedback, error messages without field highlights, error messages that disappear too quickly (<1s), error messages not associated with inputs. Then test positive path: Find the login form, enter valid credentials (username/email: ${username}, password: ${password}), submit, and verify if login succeeds. After successful login attempt, validate at least TWO of: presence of auth cookie/token, user-specific UI visible (avatar/logout/profile menu), guest-only UI removed, URL transition to authenticated route. If login appears successful but validations fail, mark as PARTIAL_SUCCESS. During invalid attempts, watch for rate limits/lockouts (CAPTCHA appearing, "too many attempts" messaging, temporary lock notices) and STOP immediately when detected (limit to ≤3 invalid attempts). When you find a username/email field, type "${username}". When you find a password field, type "${password}". Always check for error messages, loading states, and disabled submit buttons.`
-              break
-            case 'signup':
-              goal = `SIGN-UP & ONBOARDING VALIDATION: First, detect and report multi-step signup flows (number of steps, progress indicators, required vs optional steps). DO NOT auto-complete additional steps beyond the first. Then check for CAPTCHA or verification blockers - if detected, mark test as BLOCKED. Detect and classify verification handoff requirements: "Check your email" screens, OTP input fields, magic link instructions, SMS verification prompts. If verification is required, mark test outcome as COMPLETED_UP_TO_VERIFICATION. Extract and report password policy: minimum length, character requirements (uppercase, lowercase, numbers, special chars), strength meter presence, inline vs submit-time validation, error clarity (actionable vs vague). Test required field validation: Try submitting the form with empty required fields and verify validation error messages appear and are visible near the affected fields. Test client-side validation: Enter invalid email format (e.g., "notanemail") and verify error message. Enter weak password if policy is visible and verify error message. Detect conversion friction signals: CAPTCHA before/after submit, excessive required fields (>8), no inline validation, error resets entire form. Then test positive path: Find the registration/signup form, fill in all required fields with valid data (email: ${username}, password: ${password}), submit the form, and verify the result. When you find an email field, type "${username}". When you find a password field, type "${password}". Check for password policy hints (min length, special chars, etc.) and ensure all validation errors are clearly displayed.`
-              break
-            case 'visual':
-              goal = `VISUAL TESTING: Explore the main UI elements on this page. Take screenshots of key areas, check for visual consistency, broken layouts, missing images, or rendering issues. Navigate to at most 2-3 additional pages for comparison.`
-              break
-            case 'navigation':
-              goal = `NAVIGATION TEST: Click on main navigation links, test menu items, and verify page transitions work correctly. Check for broken links, 404 errors, or navigation failures. Visit 5-8 different pages.`
-              break
-            case 'form':
-              goal = `FORM TESTING: Find forms on this page (search, contact, newsletter, etc.), fill them with test data, submit, and verify validation messages and success/error states.`
-              break
-            case 'accessibility':
-              goal = `ACCESSIBILITY AUDIT: Check for common accessibility issues - missing alt text on images, proper heading hierarchy, form labels, color contrast issues, and keyboard navigation. Report findings.`
-              break
-            default:
-              goal = `VISUAL TESTING: Explore the main UI elements on this page and perform general testing.`
+          for (const testType of selectedTestTypes) {
+            switch (testType) {
+              case 'visual':
+                testGoals.push('VISUAL: Explore UI elements, take screenshots, check for visual consistency and rendering issues.')
+                break
+              case 'login':
+                const loginUsername = testCredentials?.username || testCredentials?.email || 'demo@example.com'
+                const loginPassword = testCredentials?.password || 'DemoPass123!'
+                testGoals.push(`LOGIN: Test authentication flow. Find login form, test validation (empty fields, invalid credentials), then try valid credentials (${loginUsername}/${loginPassword}).`)
+                break
+              case 'signup':
+                const signupUsername = testCredentials?.username || testCredentials?.email || 'demo@example.com'
+                const signupPassword = testCredentials?.password || 'DemoPass123!'
+                testGoals.push(`SIGNUP: Test registration flow. Find signup form, test field validation, check password requirements, submit with test data (${signupUsername}/${signupPassword}).`)
+                break
+              case 'navigation':
+                testGoals.push('NAVIGATION: Click navigation links, test menu items, verify page transitions, check for broken links or 404 errors.')
+                break
+              case 'form':
+                testGoals.push('FORM: Find forms, fill with test data, test validation messages, submit and verify success/error states.')
+                break
+              case 'accessibility':
+                testGoals.push('ACCESSIBILITY: Check for alt text, heading hierarchy, form labels, color contrast, ARIA attributes, keyboard navigation.')
+                break
+              case 'rage_bait':
+                // Rage Bait executed separately with RageBaitAnalyzer at end of test
+                console.log(`[${runId}] [${browserType.toUpperCase()}] 🔥 Rage Bait test will be executed after main test flow.`)
+                break
+            }
+          }
+
+          if (testGoals.length > 0) {
+            goal = `REGISTERED USER TESTS - Execute the following test types:\n\n${testGoals.map((g, i) => `${i + 1}. ${g}`).join('\n\n')}`
           }
         }
+
+        // NOTE: Guest test flow is handled entirely by GuestTestProcessor
+        // This TestProcessor is only for registered users
 
         const history: Array<{ action: LLMAction; timestamp: string }> = []
 
@@ -2490,52 +2502,9 @@ ${parsedInstructions.structuredPlan}
             comprehensiveData = compData || undefined
             console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Context synthesized (${context.elements.length} total, ${filteredContext.elements.length} filtered)`)
 
-            // Authentication Flow Analysis: Detect auth methods (first step only for login/signup)
-            if (isGuestMode && (guestTestType === 'login' || guestTestType === 'signup') && stepNumber === 2 && session.page) {
-              try {
-                const authMethods = await this.authFlowAnalyzer.detectAuthMethods(session.page, runId, stepNumber)
-                authAnalysis = {
-                  authMethodsDetected: authMethods.authMethods,
-                  mfaDetected: authMethods.mfaDetected,
-                  ssoProviders: authMethods.ssoProviders,
-                }
-                if (guestTestType === 'login') {
-                  urlBeforeLogin = currentUrl || build.url || ''
-                }
-              } catch (authError: any) {
-                console.warn(`[${runId}] Auth method detection failed:`, authError.message)
-              }
-            }
 
-            // Authentication Flow Analysis: Signup-specific analysis
-            if (isGuestMode && guestTestType === 'signup' && session.page) {
-              try {
-                // Detect signup steps
-                const signupSteps = await this.authFlowAnalyzer.analyzeSignupSteps(session.page, runId, stepNumber)
-                if (!authAnalysis) authAnalysis = {}
-                authAnalysis.signupStepsDetected = signupSteps.steps
-                authAnalysis.currentStepIndex = signupSteps.currentStepIndex
-
-                // Detect verification handoff
-                const verification = await this.authFlowAnalyzer.detectVerificationHandoff(session.page, runId, stepNumber)
-                authAnalysis.verificationHandoff = verification
-
-                // Analyze password policy
-                const passwordAnalysis = await this.authFlowAnalyzer.analyzePasswordPolicy(session.page, runId, stepNumber)
-                if (!authAnalysis.passwordPolicySummary) {
-                  authAnalysis.passwordPolicySummary = passwordAnalysis.policy
-                  authAnalysis.passwordUxIssues = passwordAnalysis.issues
-                }
-
-                // Detect conversion blockers
-                const blockers = await this.authFlowAnalyzer.detectConversionBlockers(session.page, runId, stepNumber)
-                if (!authAnalysis.conversionBlockers) {
-                  authAnalysis.conversionBlockers = blockers
-                }
-              } catch (signupError: any) {
-                console.warn(`[${runId}] Signup analysis failed:`, signupError.message)
-              }
-            }
+            // NOTE: Guest-specific auth flow analysis is in GuestTestProcessor
+            // This processor handles registered users with multi-select test types
 
             // Log user instructions if present (remind AI of priority)
             if (hasUserInstructions) {
@@ -3460,6 +3429,61 @@ ${parsedInstructions.structuredPlan}
                 })),
                 projectId
               )
+            }
+
+            // REGISTERED USER: Execute Rage Bait tests if selected (runs after main test flow)
+            if (selectedTestTypes && selectedTestTypes.includes('rage_bait') && session?.page) {
+              console.log(`[${runId}] [${browserType.toUpperCase()}] 🔥 Running Rage Bait edge-case tests (registered user)`)
+              try {
+                const { RageBaitAnalyzer } = await import('../services/rageBaitAnalyzer')
+                const rageBaitAnalyzer = new RageBaitAnalyzer()
+
+                // First find a form on the current page
+                const formSearch = await rageBaitAnalyzer.findForm(session.page, runId)
+
+                if (formSearch.found) {
+                  // Run all 5 rage bait tests
+                  const rageBaitResults = await rageBaitAnalyzer.runAllTests(session.page, runId)
+
+                  // Add rage bait steps
+                  for (const testResult of rageBaitResults.results) {
+                    const rageBaitStep: TestStep = {
+                      id: `step_${runId}_${browserType}_rage_bait_${testResult.testName.toLowerCase().replace(/\s+/g, '_')}`,
+                      stepNumber: steps.length + 1,
+                      action: 'rage_bait_test',
+                      target: testResult.testName,
+                      value: testResult.details,
+                      timestamp: new Date().toISOString(),
+                      success: testResult.passed,
+                      error: testResult.passed ? undefined : testResult.details,
+                      browser: browserType,
+                      metadata: { severity: testResult.severity, testType: 'rage_bait' } as any,
+                      environment: { browser: browserType, viewport: currentEnvironment.viewport },
+                    }
+                    steps.push(rageBaitStep)
+                  }
+
+                  // Summary step
+                  const summaryStep: TestStep = {
+                    id: `step_${runId}_${browserType}_rage_bait_summary`,
+                    stepNumber: steps.length + 1,
+                    action: 'summary',
+                    target: 'Rage Bait Test Summary',
+                    value: `${rageBaitResults.passed}/${rageBaitResults.totalTests} passed | ${rageBaitResults.critical} critical`,
+                    timestamp: new Date().toISOString(),
+                    success: rageBaitResults.critical === 0,
+                    browser: browserType,
+                    environment: { browser: browserType, viewport: currentEnvironment.viewport },
+                  }
+                  steps.push(summaryStep)
+
+                  console.log(`[${runId}] [${browserType.toUpperCase()}] 🔥 Rage Bait complete: ${rageBaitResults.passed}/${rageBaitResults.totalTests} passed`)
+                } else {
+                  console.log(`[${runId}] [${browserType.toUpperCase()}] ⚠️ Rage Bait skipped: No form found on current page`)
+                }
+              } catch (rageBaitError: any) {
+                console.warn(`[${runId}] [${browserType.toUpperCase()}] Rage Bait tests failed:`, rageBaitError.message)
+              }
             }
 
             console.log(`[${runId}] [${browserType.toUpperCase()}] Test run completed: ${steps.length} steps, ${artifacts.length} artifacts`)

@@ -401,7 +401,7 @@ BEGIN
     WHEN 'free' THEN 3
     WHEN 'starter' THEN 100
     WHEN 'indie' THEN 300
-    WHEN 'pro' THEN 1000
+    WHEN 'pro' THEN 750
     ELSE 3 -- Default to free limits
   END;
   

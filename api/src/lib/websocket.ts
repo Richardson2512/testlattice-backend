@@ -23,7 +23,7 @@ export class TestControlWebSocket {
   private manualActionQueues: Map<string, ManualAction[]> = new Map()
 
   constructor(server: Server) {
-    this.wss = new WebSocketServer({ 
+    this.wss = new WebSocketServer({
       server,
       path: '/ws/test-control'
     })
@@ -47,7 +47,7 @@ export class TestControlWebSocket {
 
     // Add connection to active connections
     const connection: TestConnection = { runId, ws, userId: userId || undefined }
-    
+
     if (!this.connections.has(runId)) {
       this.connections.set(runId, [])
     }
@@ -145,6 +145,16 @@ export class TestControlWebSocket {
         this.broadcast(runId, {
           type: 'replay_step_requested',
           stepNumber: message.stepNumber,
+          timestamp: new Date().toISOString(),
+        })
+        break
+
+      case 'verification_input':
+        // User is providing verification input (email link or OTP code)
+        this.broadcast(runId, {
+          type: 'verification_input_received',
+          inputType: message.inputType, // 'link' or 'otp'
+          value: message.value,
           timestamp: new Date().toISOString(),
         })
         break
@@ -274,6 +284,25 @@ export class TestControlWebSocket {
       type: 'stream_available',
       streamUrl,
       token,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  /**
+   * Notify connected clients that verification input is required (email link or OTP)
+   */
+  public notifyVerificationRequired(runId: string, context: {
+    message: string
+    verificationType: 'email' | 'magic_link' | 'otp' | 'sms'
+    screenshot?: string
+    timeoutMs?: number
+  }) {
+    this.broadcast(runId, {
+      type: 'verification_required',
+      context: {
+        ...context,
+        timeoutMs: context.timeoutMs || 120000, // 2 minute default
+      },
       timestamp: new Date().toISOString(),
     })
   }

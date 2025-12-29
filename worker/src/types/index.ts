@@ -151,9 +151,11 @@ export interface TestOptions {
   approvalPolicy?: ApprovalPolicy
   designSpec?: DesignSpec  // Optional design specification for visual consistency checks
   browserMatrix?: Array<'chromium' | 'firefox' | 'webkit'>  // Defaults to ['chromium'] for cross-browser testing
-  // Guest test options
+  // Registered user test options (multi-select)
+  selectedTestTypes?: Array<'visual' | 'login' | 'signup' | 'navigation' | 'form' | 'accessibility' | 'rage_bait'>
+  // Guest test options (handled by GuestTestProcessor)
   isGuestRun?: boolean
-  guestTestType?: 'login' | 'signup' | 'visual' | 'navigation' | 'form' | 'accessibility'
+  guestTestType?: 'login' | 'signup' | 'visual' | 'navigation' | 'form' | 'accessibility' | 'rage_bait'
   guestCredentials?: {
     username?: string
     email?: string

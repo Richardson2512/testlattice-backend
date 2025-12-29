@@ -684,6 +684,78 @@ export async function testRoutes(fastify: FastifyInstance) {
     }
   })
 
+  // Submit verification input (email link or OTP code)
+  // User provides this when signup flow requires email/OTP verification
+  fastify.post<{
+    Params: { runId: string }
+    Body: {
+      inputType: 'link' | 'otp'
+      value: string
+    }
+  }>('/:runId/verification-input', async (request: any, reply: any) => {
+    try {
+      const { runId } = request.params
+      const { inputType, value } = request.body
+
+      if (!inputType || !value) {
+        return reply.code(400).send({ error: 'inputType and value are required' })
+      }
+
+      if (inputType === 'link') {
+        // Validate URL format
+        try {
+          new URL(value)
+        } catch {
+          return reply.code(400).send({ error: 'Invalid URL format for verification link' })
+        }
+      }
+
+      if (inputType === 'otp' && !/^\d{4,8}$/.test(value)) {
+        return reply.code(400).send({ error: 'OTP must be 4-8 digits' })
+      }
+
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      // Import Redis and publish to worker
+      const Redis = (await import('ioredis')).default
+      const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
+
+      const channel = `verification:${runId}`
+      const input = {
+        runId,
+        inputType,
+        value,
+        timestamp: new Date().toISOString(),
+      }
+
+      await redis.publish(channel, JSON.stringify(input))
+      await redis.quit()
+
+      // Also notify via WebSocket for UI updates
+      const ws = getTestControlWS()
+      if (ws) {
+        ws.broadcast(runId, {
+          type: 'verification_input_received',
+          inputType,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
+      fastify.log.info(`Verification input received for test ${runId}: ${inputType}`)
+
+      return reply.send({
+        success: true,
+        message: `Verification ${inputType === 'link' ? 'link' : 'OTP'} submitted successfully`
+      })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to submit verification input' })
+    }
+  })
+
   // Heuristics API endpoints (God Mode Memory)
 
   // Store heuristic (learned action)

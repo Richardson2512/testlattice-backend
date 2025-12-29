@@ -381,6 +381,119 @@ export class GuestTestProcessor {
             }
         }
 
+        // RAGE BAIT TEST: Execute specialized edge-case stress tests
+        if (guestTestType === 'rage_bait') {
+            console.log(`[${runId}] 🔥 Starting Rage Bait Test (5 edge-case stress tests)`)
+
+            // Import the Rage Bait Analyzer
+            const { RageBaitAnalyzer } = await import('../services/rageBaitAnalyzer')
+            const rageBaitAnalyzer = new RageBaitAnalyzer()
+
+            // First, find a form
+            const formSearch = await rageBaitAnalyzer.findForm(session.page!, runId)
+
+            if (!formSearch.found) {
+                // No form found - return error with helpful message
+                console.log(`[${runId}] No form found for Rage Bait test`)
+                const errorStep: TestStep = {
+                    id: `step_${runId}_no_form`,
+                    stepNumber: stepNumber,
+                    action: 'error',
+                    target: 'No Form Found',
+                    value: 'Could not find a form on this page or by navigating to common form pages',
+                    timestamp: new Date().toISOString(),
+                    success: false,
+                    error: 'RAGE BAIT TEST FAILED: No form found on the provided URL. Please provide a URL that contains a form (e.g., login page, signup page, contact form, or any page with a form).',
+                    environment: { browser: 'chromium', viewport: '1280x720' },
+                }
+                steps.push(errorStep)
+                this.broadcastStep(runId, errorStep)
+
+                await this.updateTestRunStatus(runId, TestRunStatus.FAILED, 'No form found - provide URL with a form', steps)
+                return {
+                    success: false,
+                    steps,
+                    artifacts,
+                    stage: 'execution',
+                }
+            }
+
+            // Form found - notify and run tests
+            const formFoundStep: TestStep = {
+                id: `step_${runId}_form_found`,
+                stepNumber: stepNumber++,
+                action: 'navigate',
+                target: 'Form Located',
+                value: formSearch.navigated ? `Found form at: ${formSearch.url}` : 'Form found on initial page',
+                timestamp: new Date().toISOString(),
+                success: true,
+                environment: { browser: 'chromium', viewport: '1280x720' },
+            }
+            steps.push(formFoundStep)
+            this.broadcastStep(runId, formFoundStep)
+
+            // Run all 5 rage bait tests
+            const rageBaitResults = await rageBaitAnalyzer.runAllTests(session.page!, runId)
+
+            // Convert each result to a test step
+            for (const result of rageBaitResults.results) {
+                const step: TestStep = {
+                    id: `step_${runId}_${result.testName.toLowerCase().replace(/\s+/g, '_')}`,
+                    stepNumber: stepNumber++,
+                    action: 'rage_bait_test',
+                    target: result.testName,
+                    value: result.details,
+                    timestamp: new Date().toISOString(),
+                    success: result.passed,
+                    error: result.passed ? undefined : result.details,
+                    metadata: {
+                        severity: result.severity,
+                        testType: 'rage_bait',
+                    } as any,
+                    environment: { browser: 'chromium', viewport: '1280x720' },
+                }
+                steps.push(step)
+                this.broadcastStep(runId, step)
+            }
+
+            // Create summary step
+            const summaryStep: TestStep = {
+                id: `step_${runId}_rage_bait_summary`,
+                stepNumber: stepNumber++,
+                action: 'summary',
+                target: 'Rage Bait Test Summary',
+                value: `${rageBaitResults.passed}/${rageBaitResults.totalTests} tests passed | ${rageBaitResults.critical} critical issues`,
+                timestamp: new Date().toISOString(),
+                success: rageBaitResults.critical === 0 && rageBaitResults.passed >= rageBaitResults.totalTests - 1,
+                metadata: {
+                    totalTests: rageBaitResults.totalTests,
+                    passed: rageBaitResults.passed,
+                    failed: rageBaitResults.failed,
+                    critical: rageBaitResults.critical,
+                } as any,
+                environment: { browser: 'chromium', viewport: '1280x720' },
+            }
+            steps.push(summaryStep)
+            this.broadcastStep(runId, summaryStep)
+
+            // Determine overall success
+            const overallSuccess = rageBaitResults.critical === 0
+
+            await this.updateTestRunStatus(
+                runId,
+                overallSuccess ? TestRunStatus.COMPLETED : TestRunStatus.FAILED,
+                overallSuccess ? undefined : `${rageBaitResults.critical} critical issues found`,
+                steps
+            )
+
+            return {
+                success: overallSuccess,
+                steps,
+                artifacts,
+                stage: 'execution',
+            }
+        }
+
         // Track visited elements
         const visitedSelectors = new Set<string>()
         const visitedUrls = new Set<string>([targetUrl])
@@ -566,6 +679,140 @@ export class GuestTestProcessor {
                         const verification = await this.authFlowAnalyzer.detectVerificationHandoff(session.page, runId, stepNumber)
                         authAnalysis.verificationHandoff = verification
 
+                        // VERIFICATION INPUT HANDLING: Pause and wait for user input
+                        if (verification.detected && verification.type !== 'none') {
+                            console.log(`[${runId}] Verification handoff detected: ${verification.type}`)
+                            log(`Verification required: ${verification.type}`)
+
+                            // Import verification handler
+                            const { VerificationInputHandler } = await import('../services/verificationInputHandler')
+                            const verificationHandler = new VerificationInputHandler()
+
+                            // Notify frontend that verification is required
+                            const verificationStep: TestStep = {
+                                id: `step_${runId}_verification_wait`,
+                                stepNumber: stepNumber,
+                                action: 'wait_verification',
+                                target: 'User Verification Required',
+                                value: verification.type === 'otp'
+                                    ? 'Please enter the OTP code from your email/SMS'
+                                    : 'Please paste the verification link from your email',
+                                timestamp: new Date().toISOString(),
+                                success: undefined, // Pending
+                                metadata: {
+                                    verificationType: verification.type,
+                                    message: verification.message,
+                                    timeoutMs: 120000, // 2 minutes
+                                } as any,
+                                environment: { browser: 'chromium', viewport: '1280x720' },
+                            }
+                            steps.push(verificationStep)
+                            this.broadcastStep(runId, verificationStep)
+
+                            // Broadcast verification required via Redis for WebSocket
+                            await this.redis.publish(`test:${runId}:verification`, JSON.stringify({
+                                type: 'verification_required',
+                                context: {
+                                    message: verification.type === 'otp'
+                                        ? 'Please enter the OTP code sent to your email/phone'
+                                        : 'Please paste the verification link from your email',
+                                    verificationType: verification.type,
+                                    timeoutMs: 120000,
+                                },
+                                timestamp: new Date().toISOString(),
+                            }))
+
+                            log('Waiting for user to provide verification input (2 minute timeout)...')
+
+                            // Wait for user to provide verification input
+                            const userInput = await verificationHandler.waitForVerificationInput(
+                                runId,
+                                verification.type as 'email' | 'magic_link' | 'otp' | 'sms',
+                                120000 // 2 minute timeout
+                            )
+
+                            if (userInput) {
+                                log(`Received verification input: ${userInput.inputType}`)
+                                verificationStep.success = true
+                                verificationStep.value = `Received ${userInput.inputType === 'otp' ? 'OTP code' : 'verification link'}`
+                                this.broadcastStep(runId, verificationStep)
+
+                                if (userInput.inputType === 'link') {
+                                    // Navigate to the verification link
+                                    console.log(`[${runId}] Navigating to verification link...`)
+                                    await this.playwrightRunner.executeAction(session.id, {
+                                        action: 'navigate',
+                                        value: userInput.value,
+                                        description: 'Navigate to user-provided verification link',
+                                    }, { timeout: 30000, waitUntil: 'domcontentloaded' })
+
+                                    log('Successfully navigated to verification link')
+                                    // Continue test execution - will pick up from post-verification page
+                                } else if (userInput.inputType === 'otp') {
+                                    // Find OTP input field and enter the code
+                                    console.log(`[${runId}] Entering OTP code...`)
+                                    const otpEntered = await session.page.evaluate((otpCode: string) => {
+                                        // Find OTP input fields
+                                        const otpInputs = document.querySelectorAll('input[type="text"][name*="otp" i], input[type="text"][name*="code" i], input[inputmode="numeric"], input[maxlength="1"], input[maxlength="6"]')
+                                        if (otpInputs.length === 0) return false
+
+                                        // Check if it's a single field or multiple fields (one per digit)
+                                        if (otpInputs.length === 1 || (otpInputs[0] as HTMLInputElement).maxLength > 1) {
+                                            // Single field - enter full OTP
+                                            (otpInputs[0] as HTMLInputElement).value = otpCode
+                                            otpInputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+                                            otpInputs[0].dispatchEvent(new Event('change', { bubbles: true }))
+                                        } else {
+                                            // Multiple fields (one per digit)
+                                            for (let i = 0; i < Math.min(otpCode.length, otpInputs.length); i++) {
+                                                (otpInputs[i] as HTMLInputElement).value = otpCode[i]
+                                                otpInputs[i].dispatchEvent(new Event('input', { bubbles: true }))
+                                                otpInputs[i].dispatchEvent(new Event('change', { bubbles: true }))
+                                            }
+                                        }
+                                        return true
+                                    }, userInput.value)
+
+                                    if (otpEntered) {
+                                        log('Successfully entered OTP code')
+                                        // Try to find and click submit/verify button
+                                        await session.page.waitForTimeout(500)
+                                        const submitClicked = await session.page.evaluate(() => {
+                                            const submitBtn = document.querySelector('button[type="submit"], button:has-text("Verify"), button:has-text("Submit"), button:has-text("Confirm")')
+                                            if (submitBtn) {
+                                                (submitBtn as HTMLElement).click()
+                                                return true
+                                            }
+                                            return false
+                                        })
+                                        if (submitClicked) {
+                                            log('Clicked submit button after OTP entry')
+                                        }
+                                    } else {
+                                        log('Could not find OTP input field')
+                                    }
+                                }
+                            } else {
+                                // Timeout - no user input received
+                                console.log(`[${runId}] Verification input timeout - test cannot proceed`)
+                                log('Verification timeout - no input received within 2 minutes')
+                                verificationStep.success = false
+                                verificationStep.error = 'Verification timeout: No input received within 2 minutes'
+                                this.broadcastStep(runId, verificationStep)
+
+                                // Return early - test cannot proceed without verification
+                                await verificationHandler.disconnect()
+                                return {
+                                    success: false,
+                                    steps,
+                                    artifacts,
+                                    stage: 'execution',
+                                }
+                            }
+
+                            await verificationHandler.disconnect()
+                        }
+
                         // Analyze password policy
                         const passwordAnalysis = await this.authFlowAnalyzer.analyzePasswordPolicy(session.page, runId, stepNumber)
                         if (!authAnalysis.passwordPolicySummary) {
@@ -620,6 +867,181 @@ export class GuestTestProcessor {
                         authAnalysis.authUxIssues.push(...uxIssues)
                     } catch (uxError: any) {
                         console.warn(`[${runId}] UX issue analysis failed:`, uxError.message)
+                    }
+                }
+
+                // Authentication Flow Analysis: Login MFA/2FA detection and handling
+                if (guestTestType === 'login' && session.page && loginAttempted) {
+                    try {
+                        // Detect if MFA/2FA is required after login
+                        const mfaDetected = await session.page.evaluate(() => {
+                            const bodyText = document.body.textContent?.toLowerCase() || ''
+                            const hasOtpField = !!(
+                                document.querySelector('input[inputmode="numeric"]') ||
+                                document.querySelector('input[maxlength="1"]') ||
+                                document.querySelector('input[maxlength="6"]') ||
+                                document.querySelector('input[name*="otp" i]') ||
+                                document.querySelector('input[name*="code" i]') ||
+                                document.querySelector('input[name*="2fa" i]') ||
+                                document.querySelector('input[name*="mfa" i]')
+                            )
+                            const hasMfaText =
+                                bodyText.includes('verification code') ||
+                                bodyText.includes('enter the code') ||
+                                bodyText.includes('two-factor') ||
+                                bodyText.includes('2fa') ||
+                                bodyText.includes('multi-factor') ||
+                                bodyText.includes('mfa') ||
+                                bodyText.includes('authenticator') ||
+                                bodyText.includes('sent a code') ||
+                                bodyText.includes('check your email') ||
+                                bodyText.includes('check your phone') ||
+                                bodyText.includes('verify your identity')
+
+                            const hasMagicLink =
+                                bodyText.includes('magic link') ||
+                                bodyText.includes('login link') ||
+                                bodyText.includes('click the link in your email')
+
+                            return {
+                                detected: hasOtpField || hasMfaText || hasMagicLink,
+                                type: hasMagicLink ? 'magic_link' : (hasOtpField ? 'otp' : (hasMfaText ? 'otp' : 'none'))
+                            }
+                        })
+
+                        if (mfaDetected.detected && mfaDetected.type !== 'none') {
+                            console.log(`[${runId}] MFA/2FA detected after login: ${mfaDetected.type}`)
+                            log(`MFA/2FA verification required: ${mfaDetected.type}`)
+
+                            // Import verification handler
+                            const { VerificationInputHandler } = await import('../services/verificationInputHandler')
+                            const verificationHandler = new VerificationInputHandler()
+
+                            // Notify frontend that MFA verification is required
+                            const verificationStep: TestStep = {
+                                id: `step_${runId}_mfa_wait`,
+                                stepNumber: stepNumber,
+                                action: 'wait_verification',
+                                target: 'MFA/2FA Verification Required',
+                                value: mfaDetected.type === 'magic_link'
+                                    ? 'Please paste the login link from your email'
+                                    : 'Please enter the verification code from your email/phone/authenticator',
+                                timestamp: new Date().toISOString(),
+                                success: undefined, // Pending
+                                metadata: {
+                                    verificationType: mfaDetected.type,
+                                    message: 'MFA/2FA verification required after login',
+                                    timeoutMs: 120000, // 2 minutes
+                                } as any,
+                                environment: { browser: 'chromium', viewport: '1280x720' },
+                            }
+                            steps.push(verificationStep)
+                            this.broadcastStep(runId, verificationStep)
+
+                            // Broadcast verification required via Redis for WebSocket
+                            await this.redis.publish(`test:${runId}:verification`, JSON.stringify({
+                                type: 'verification_required',
+                                context: {
+                                    message: mfaDetected.type === 'magic_link'
+                                        ? 'Please paste the login link from your email'
+                                        : 'Please enter the MFA/2FA code',
+                                    verificationType: mfaDetected.type,
+                                    timeoutMs: 120000,
+                                },
+                                timestamp: new Date().toISOString(),
+                            }))
+
+                            log('Waiting for MFA/2FA input (2 minute timeout)...')
+
+                            // Wait for user to provide verification input
+                            const userInput = await verificationHandler.waitForVerificationInput(
+                                runId,
+                                mfaDetected.type as 'email' | 'magic_link' | 'otp' | 'sms',
+                                120000 // 2 minute timeout
+                            )
+
+                            if (userInput) {
+                                log(`Received MFA input: ${userInput.inputType}`)
+                                verificationStep.success = true
+                                verificationStep.value = `Received ${userInput.inputType === 'otp' ? 'verification code' : 'login link'}`
+                                this.broadcastStep(runId, verificationStep)
+
+                                if (userInput.inputType === 'link') {
+                                    // Navigate to the magic link
+                                    console.log(`[${runId}] Navigating to magic login link...`)
+                                    await this.playwrightRunner.executeAction(session.id, {
+                                        action: 'navigate',
+                                        value: userInput.value,
+                                        description: 'Navigate to user-provided login link',
+                                    }, { timeout: 30000, waitUntil: 'domcontentloaded' })
+
+                                    log('Successfully navigated to login link')
+                                } else if (userInput.inputType === 'otp') {
+                                    // Find OTP/MFA input field and enter the code
+                                    console.log(`[${runId}] Entering MFA code...`)
+                                    const otpEntered = await session.page.evaluate((otpCode: string) => {
+                                        // Find MFA/OTP input fields
+                                        const otpInputs = document.querySelectorAll('input[inputmode="numeric"], input[maxlength="1"], input[maxlength="6"], input[name*="otp" i], input[name*="code" i], input[name*="2fa" i], input[name*="mfa" i], input[type="text"][pattern*="[0-9]"]')
+                                        if (otpInputs.length === 0) return false
+
+                                        // Check if it's a single field or multiple fields (one per digit)
+                                        if (otpInputs.length === 1 || (otpInputs[0] as HTMLInputElement).maxLength > 1) {
+                                            // Single field - enter full code
+                                            (otpInputs[0] as HTMLInputElement).value = otpCode
+                                            otpInputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+                                            otpInputs[0].dispatchEvent(new Event('change', { bubbles: true }))
+                                        } else {
+                                            // Multiple fields (one per digit)
+                                            for (let i = 0; i < Math.min(otpCode.length, otpInputs.length); i++) {
+                                                (otpInputs[i] as HTMLInputElement).value = otpCode[i]
+                                                otpInputs[i].dispatchEvent(new Event('input', { bubbles: true }))
+                                                otpInputs[i].dispatchEvent(new Event('change', { bubbles: true }))
+                                            }
+                                        }
+                                        return true
+                                    }, userInput.value)
+
+                                    if (otpEntered) {
+                                        log('Successfully entered MFA code')
+                                        // Try to find and click submit/verify button
+                                        await session.page.waitForTimeout(500)
+                                        const submitClicked = await session.page.evaluate(() => {
+                                            const submitBtn = document.querySelector('button[type="submit"], button:has-text("Verify"), button:has-text("Submit"), button:has-text("Continue"), button:has-text("Confirm")')
+                                            if (submitBtn) {
+                                                (submitBtn as HTMLElement).click()
+                                                return true
+                                            }
+                                            return false
+                                        })
+                                        if (submitClicked) {
+                                            log('Clicked submit button after MFA entry')
+                                        }
+                                    } else {
+                                        log('Could not find MFA input field')
+                                    }
+                                }
+                            } else {
+                                // Timeout - no user input received
+                                console.log(`[${runId}] MFA input timeout - test cannot proceed`)
+                                log('MFA timeout - no input received within 2 minutes')
+                                verificationStep.success = false
+                                verificationStep.error = 'MFA verification timeout: No input received within 2 minutes'
+                                this.broadcastStep(runId, verificationStep)
+
+                                // Return early - test cannot proceed without MFA
+                                await verificationHandler.disconnect()
+                                return {
+                                    success: false,
+                                    steps,
+                                    artifacts,
+                                    stage: 'execution',
+                                }
+                            }
+
+                            await verificationHandler.disconnect()
+                        }
+                    } catch (mfaError: any) {
+                        console.warn(`[${runId}] MFA detection failed:`, mfaError.message)
                     }
                 }
 
@@ -1007,6 +1429,9 @@ export class GuestTestProcessor {
 
             case 'accessibility':
                 return `ACCESSIBILITY AUDIT: Check for common accessibility issues - missing alt text on images, proper heading hierarchy (exactly one h1, no skipped heading levels), form labels, color contrast issues, and keyboard navigation. Validate ARIA attributes (aria-label, aria-describedby, aria-required, role attributes). Check for keyboard traps (elements that prevent Tab navigation). Map issues to WCAG levels (A / AA / AAA). Report findings with severity and WCAG compliance level.`
+
+            case 'rage_bait':
+                return `RAGE BAIT TEST: This is a specialized edge-case stress test. The test runner will automatically execute 5 tests: (1) Back Button Zombie - testing form resubmission and data leaks, (2) Session Timeout - testing graceful handling when session expires, (3) Enter Key Trap - testing if Enter key prematurely submits forms, (4) Special Characters - testing XSS vulnerabilities and emoji/encoding issues, (5) Input Overflow - testing UI resilience to extremely long inputs. First, find a form on this page. If no form is present, navigate to find one.`
 
             default:
                 return `VISUAL TESTING: Explore the main UI elements on ${url || 'this page'} and perform general testing.`

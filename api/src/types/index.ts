@@ -37,6 +37,7 @@ export enum GuestTestType {
   NAVIGATION = 'navigation', // Tests link clicking and page navigation
   FORM = 'form',             // Tests form inputs, validation, and submission
   ACCESSIBILITY = 'accessibility', // Basic accessibility audit (alt tags, aria, contrast)
+  RAGE_BAIT = 'rage_bait',   // Edge case stress tests (back button, session timeout, etc.)
 }
 
 // Credentials for login/signup test flows (demo data only!)
@@ -90,6 +91,11 @@ export interface TestOptions {
   approvalPolicy?: ApprovalPolicy;
   browserMatrix?: Array<'chromium' | 'firefox' | 'webkit'>;
   continuousPopupHandling?: boolean;
+  // Registered user test options (multi-select)
+  selectedTestTypes?: Array<'visual' | 'login' | 'signup' | 'navigation' | 'form' | 'accessibility' | 'rage_bait'>;
+  // Guest test specific options (single select - SEPARATE FLOW)
+  guestTestType?: 'login' | 'signup' | 'visual' | 'navigation' | 'form' | 'accessibility' | 'rage_bait';
+  guestCredentials?: GuestCredentials;
 }
 
 export interface CreateTestRunRequest {
