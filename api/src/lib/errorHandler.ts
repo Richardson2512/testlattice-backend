@@ -1,6 +1,6 @@
-// Standardized Error Handling for API Routes
 import { FastifyReply, FastifyRequest } from 'fastify'
 import * as Sentry from '@sentry/node'
+import { logger } from './logger'
 
 /**
  * Standard API Error Response
@@ -41,7 +41,7 @@ export async function handleApiError(
       message,
     })
   } else {
-    console.error('[API Error]', message, error)
+    logger.error({ err: error, message }, '[API Error]')
   }
 
   // Report to Sentry (only if DSN is configured)

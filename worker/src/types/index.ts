@@ -159,6 +159,7 @@ export interface TestOptions {
     email?: string
     password?: string
   }
+  continuousPopupHandling?: boolean
 }
 
 export interface DiagnosisComponentInsight {

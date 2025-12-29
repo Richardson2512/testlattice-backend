@@ -214,7 +214,7 @@ export function validateTierLimits(
   tier: UserTier,
   options: {
     maxSteps?: number
-    testMode?: 'single' | 'multi' | 'all' | 'monkey'
+    testMode?: 'single' | 'multi' | 'all' | 'monkey' | 'behavior'
     browserMatrix?: string[]
     skipDiagnosis?: boolean
     godMode?: boolean

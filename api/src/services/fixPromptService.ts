@@ -183,8 +183,8 @@ export class FixPromptService {
     // Extract DOM observations from failed steps
     const domObservations: string[] = []
     failedSteps.forEach(step => {
-      if (step.selector) {
-        domObservations.push(`Step ${step.stepNumber}: Tried to interact with "${step.selector}"`)
+      if (step.target) {
+        domObservations.push(`Step ${step.stepNumber}: Tried to interact with "${step.target}"`)
       }
       if (step.error) {
         domObservations.push(`Step ${step.stepNumber}: ${step.error}`)
@@ -209,7 +209,7 @@ export class FixPromptService {
       failedSteps: failedSteps.map(s => ({
         stepNumber: s.stepNumber,
         action: s.action,
-        target: s.target || s.selector,
+        target: s.target,
         error: s.error,
         screenshotUrl: s.screenshotUrl,
       })),

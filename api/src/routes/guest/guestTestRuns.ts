@@ -203,7 +203,7 @@ export async function guestTestRunRoutes(fastify: FastifyInstance) {
     try {
       // Optional: Add API key check for security
       const apiKey = request.headers['x-api-key']
-      const expectedKey = process.env.CLEANUP_API_KEY || 'cleanup-secret-key'
+      const expectedKey = process.env.CLEANUP_API_KEY || 'change-in-production'
 
       if (apiKey !== expectedKey) {
         return reply.code(401).send({ error: 'Unauthorized' })

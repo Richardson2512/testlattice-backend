@@ -29,6 +29,7 @@ import { UnifiedPreflightService } from '../services/unifiedPreflightService'
 import { getExecutionLogEmitter } from '../services/executionLogEmitter'
 import { getCookieStatus } from '../services/cookieStatusTracker'
 import { AuthenticationFlowAnalyzer } from '../services/authenticationFlowAnalyzer'
+import { ContinuousPopupHandler } from '../services/continuousPopupHandler'
 import {
     setPreflightStatus,
     getPreflightStatus,
@@ -73,6 +74,7 @@ export class GuestTestProcessor {
     private testExecutor: TestExecutor
     private unifiedPreflight: UnifiedPreflightService
     private authFlowAnalyzer: AuthenticationFlowAnalyzer
+    private continuousPopupHandler: ContinuousPopupHandler
 
     // Wasabi storage for guest artifacts (24hr retention)
     private wasabiStorage: WasabiStorageService | null = null
@@ -90,8 +92,7 @@ export class GuestTestProcessor {
         this.unifiedBrain = unifiedBrain
         this.storageService = storageService
         this.playwrightRunner = playwrightRunner
-        this.storageService = storageService
-        this.playwrightRunner = playwrightRunner
+
         this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
         this.successEvaluator = new SuccessEvaluator()
 
@@ -135,6 +136,7 @@ export class GuestTestProcessor {
             this.comprehensiveTesting,
             playwrightRunner
         )
+        this.continuousPopupHandler = new ContinuousPopupHandler()
     }
 
     /**
@@ -406,6 +408,17 @@ export class GuestTestProcessor {
             stepNumber++
 
             try {
+                // CONTINUOUS POPUP HANDLING
+                // Check and dismiss popups that might have appeared after preflight or previous actions
+                if (options?.continuousPopupHandling !== false && session.page) {
+                    await this.continuousPopupHandler.checkAndDismissPopups(
+                        session.page,
+                        session.page.url(),
+                        runId,
+                        stepNumber
+                    )
+                }
+
                 // Synthesize context
                 // DEBUG: File logging
                 const fs = await import('fs');

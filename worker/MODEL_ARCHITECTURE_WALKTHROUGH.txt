@@ -93,7 +93,7 @@ CONFIGURATION
 
 Environment Variables Required:
 -------------------------------
-OPENAI_API_KEY=sk-proj-... (Required for both GPT-5 Mini and GPT-4o)
+OPENAI_API_KEY=your-openai-api-key-here (Required for both GPT-5 Mini and GPT-4o)
 
 Optional Configuration:
 -----------------------

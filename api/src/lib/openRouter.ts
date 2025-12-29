@@ -94,7 +94,7 @@ export class OpenRouterService {
         throw new Error(`OpenRouter API error: ${response.status} ${errorText}`)
       }
 
-      const data: OpenRouterResponse = await response.json()
+      const data = await response.json() as OpenRouterResponse
 
       if (!data.choices || data.choices.length === 0) {
         throw new Error('No response from OpenRouter')

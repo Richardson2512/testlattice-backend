@@ -2,6 +2,7 @@
 import { randomUUID } from 'crypto'
 import { TestRun, TestRunStatus, Project, Team, TestArtifact } from '../types'
 import { supabase } from './supabase'
+import { logger } from './logger'
 
 export class Database {
   // Test Runs
@@ -156,14 +157,14 @@ export class Database {
       .single()
 
     if (error) {
-      console.error('Project creation error:', {
+      logger.error({
         error: error.message,
         code: error.code,
         details: error.details,
         hint: error.hint,
         userId,
         data,
-      })
+      }, 'Project creation error')
       throw new Error(`Failed to create project: ${error.message}${error.code ? ` (Code: ${error.code})` : ''}`)
     }
 
@@ -290,7 +291,7 @@ export class Database {
       .gte('created_at', windowStart)
 
     if (error) {
-      console.error('Failed to get guest test count:', error)
+      logger.error({ err: error }, 'Failed to get guest test count')
       return 0 // Fail open
     }
 
@@ -393,8 +394,8 @@ export class Database {
       const { error } = await supabase.from('projects').select('id').limit(1)
 
       if (error) {
-        console.warn('Database connection warning:', error.message)
-        console.warn('Make sure Supabase tables are created. See SETUP.md for schema.')
+        logger.warn({ err: error.message }, 'Database connection warning')
+        logger.warn('Make sure Supabase tables are created. See SETUP.md for schema.')
         return
       }
 
@@ -406,12 +407,12 @@ export class Database {
           description: 'Default project for testing',
           teamId: 'team_default',
         })
-        console.log('Database initialized with default project:', defaultProject.id)
+        logger.info({ projectId: defaultProject.id }, 'Database initialized with default project')
       } else {
-        console.log('Database connected successfully')
+        logger.info('Database connected successfully')
       }
     } catch (error: any) {
-      console.warn('Database initialization warning:', error.message)
+      logger.warn({ err: error.message }, 'Database initialization warning')
     }
   }
 }

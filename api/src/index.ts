@@ -38,6 +38,7 @@ import helmet from '@fastify/helmet'
 import cookie from '@fastify/cookie'
 import * as Sentry from '@sentry/node'
 import { config } from './config/env'
+import { logger } from './lib/logger'
 import { Database } from './lib/db'
 import { testRoutes } from './routes/tests'
 import { guestTestRunRoutes } from './routes/guest/guestTestRuns'
@@ -54,7 +55,7 @@ import { startTestRunCleanupScheduler } from './jobs/cleanupTestRuns'
 import { startScheduledJobs } from './jobs/scheduler'
 
 const fastify = Fastify({
-  logger: true,
+  logger: logger,
 })
 
 // Register plugins
@@ -76,6 +77,7 @@ async function registerPlugins() {
   // In development, allow localhost origins
   if (config.nodeEnv === 'development') {
     allowedOrigins.push('http://127.0.0.1:3000')
+    allowedOrigins.push('http://localhost:3000')
   }
 
   // Always allow the production Vercel frontend
@@ -97,7 +99,7 @@ async function registerPlugins() {
   })
 
   await fastify.register(cookie, {
-    secret: process.env.COOKIE_SECRET || 'Rihario-cookie-secret-key-change-in-prod', // for cookies signature
+    secret: process.env.COOKIE_SECRET || 'change-in-production', // for cookies signature
     parseOptions: {}  // options for parsing cookies
   })
 }
@@ -148,7 +150,7 @@ async function registerRoutes() {
   if (config.nodeEnv === 'development') {
     fastify.get('/debug-sentry', async (request, reply) => {
       // Log before throwing the error
-      console.log('User triggered test error', { action: 'test_error_endpoint' })
+      request.log.info({ action: 'test_error_endpoint' }, 'User triggered test error')
       // Send a test metric before throwing the error
       Sentry.metrics.increment('test_counter', 1)
       throw new Error('My first Sentry error!')
@@ -262,5 +264,5 @@ async function start() {
   }
 }
 
-
-
+// Start the server
+start()

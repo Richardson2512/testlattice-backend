@@ -88,6 +88,8 @@ export interface TestOptions {
   };
   environment?: TestEnvironment;
   approvalPolicy?: ApprovalPolicy;
+  browserMatrix?: Array<'chromium' | 'firefox' | 'webkit'>;
+  continuousPopupHandling?: boolean;
 }
 
 export interface CreateTestRunRequest {
@@ -170,6 +172,10 @@ export interface DiagnosisResult {
   recommendedTests: string[];
   pages?: DiagnosisPageSummary[];
   blockedSelectors?: string[];
+  comprehensiveTests?: {
+    consoleErrors?: Array<{ type: string; message: string; source?: string; line?: number }>;
+    networkErrors?: Array<{ failed: boolean; url: string; status: number; errorText?: string }>;
+  };
 }
 
 // Real-time diagnosis progress tracking
@@ -195,6 +201,7 @@ export interface TestStep {
   stepNumber: number;
   action: string;
   target?: string;
+  selector?: string;
   value?: string;
   timestamp: string;
   screenshotUrl?: string;

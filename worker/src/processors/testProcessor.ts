@@ -53,6 +53,7 @@ import { UnifiedBrainService } from '../services/unifiedBrainService'
 import { UnifiedAIExecutor } from '../services/unifiedAIExecutor'
 import { getExecutionLogEmitter } from '../services/executionLogEmitter'
 import { StorageService } from '../services/storage'
+
 import { PineconeService } from '../services/pinecone'
 import { PlaywrightRunner, RunnerSession } from '../runners/playwright'
 import { AppiumRunner } from '../runners/appium'
@@ -81,6 +82,7 @@ import { LearningService } from '../services/learningService'
 import type { CookieBannerHandler } from '../services/cookieBannerHandler'
 import { AuthenticationFlowAnalyzer } from '../services/authenticationFlowAnalyzer'
 import { UnifiedPreflightService } from '../services/unifiedPreflightService'
+import { ContinuousPopupHandler } from '../services/continuousPopupHandler'
 import { assertPreflightCompletedBeforeScreenshot, assertPreflightCompletedBeforeDOMSnapshot, assertPreflightCompletedBeforeAIAnalysis } from '../services/preflightInvariants'
 import { ActionContext } from '../types/actionContext'
 import Redis from 'ioredis'
@@ -111,6 +113,7 @@ export { BrowserMatrixResult }
 export class TestProcessor {
   private unifiedBrain: UnifiedBrainService
   private storageService: StorageService
+
   private pineconeService: PineconeService | null
   private playwrightRunner: PlaywrightRunner
   private appiumRunner: AppiumRunner | null
@@ -141,10 +144,12 @@ export class TestProcessor {
   private authFlowAnalyzer: AuthenticationFlowAnalyzer
   private unifiedAIExecutor: UnifiedAIExecutor
   private successEvaluator: SuccessEvaluator
+  private continuousPopupHandler: ContinuousPopupHandler
 
   constructor(
     unifiedBrain: UnifiedBrainService,
     storageService: StorageService,
+
     pineconeService: PineconeService | null,
     playwrightRunner: PlaywrightRunner,
     appiumRunner: AppiumRunner | null,
@@ -153,6 +158,7 @@ export class TestProcessor {
   ) {
     this.unifiedBrain = unifiedBrain
     this.storageService = storageService
+
     this.pineconeService = pineconeService
     this.playwrightRunner = playwrightRunner
     this.appiumRunner = appiumRunner
@@ -178,6 +184,7 @@ export class TestProcessor {
     )
 
     // Initialize refactored services
+
     this.runLogger = new RunLogger(storageService, pineconeService, this.apiUrl)
     this.contextSynthesizer = new ContextSynthesizer(unifiedBrain, this.comprehensiveTesting)
     this.testExecutor = new TestExecutor(playwrightRunner, appiumRunner, this.retryLayer)
@@ -196,6 +203,7 @@ export class TestProcessor {
       this.comprehensiveTesting,
       playwrightRunner
     )
+    this.continuousPopupHandler = new ContinuousPopupHandler()
 
     // Initialize Unified AI Executor for centralized AI call management
     this.unifiedAIExecutor = new UnifiedAIExecutor(unifiedBrain, visionValidator || null)
@@ -2442,10 +2450,16 @@ ${parsedInstructions.structuredPlan}
           let comprehensiveData: ComprehensiveTestResults | undefined = undefined
 
           try {
-            // LEGACY OVERLAY DISMISSAL REMOVED
-            // All overlay dismissal must occur during preflight phase.
-            // checkAndDismissOverlays() has been removed - it always returns false.
-            // If overlays appear after preflight, they are reported as UI issues, not auto-dismissed.
+            // CONTINUOUS POPUP HANDLING
+            // Check and dismiss popups that might have appeared after preflight or previous actions
+            if (options?.continuousPopupHandling !== false) {
+              await this.continuousPopupHandler.checkAndDismissPopups(
+                session.page,
+                session.page.url(),
+                runId,
+                stepNumber
+              )
+            }
 
             // Synthesize context using ContextSynthesizer
             console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Synthesizing context...`)
@@ -3201,6 +3215,7 @@ ${parsedInstructions.structuredPlan}
               // Save checkpoint after each step
               await this.runLogger.saveCheckpoint(runId, stepNumber, steps, artifacts, effectiveParentRunId)
 
+
               // Store embedding (if Pinecone is available)
               if (this.pineconeService) {
                 await this.pineconeService.storeEmbedding(
@@ -3431,6 +3446,7 @@ ${parsedInstructions.structuredPlan}
                 }
               }
             }
+
 
             // Store test trace in Pinecone (if available)
             if (this.pineconeService) {
@@ -3857,6 +3873,7 @@ ${parsedInstructions.structuredPlan}
 
       // Reset authentication flow analyzer for next test
       this.authFlowAnalyzer.reset()
+
 
       // Store test trace in Pinecone (if available)
       if (this.pineconeService && result && result.steps) {

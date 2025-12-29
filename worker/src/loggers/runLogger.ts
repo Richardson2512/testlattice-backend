@@ -3,6 +3,7 @@ import { TestStep, LLMAction, SelfHealingInfo, ComprehensiveTestResults } from '
 import { StorageService } from '../services/storage'
 import { PineconeService } from '../services/pinecone'
 import { VisionIssue } from '../services/visionValidator'
+import { logger } from '../utils/logger'
 
 export interface ElementBounds {
   selector: string
@@ -216,7 +217,7 @@ export class RunLogger {
         }),
       })
     } catch (error: any) {
-      console.warn(`[${runId}] Failed to save checkpoint:`, error.message)
+      logger.warn({ err: error.message, runId }, 'Failed to save checkpoint')
     }
   }
 
@@ -253,7 +254,7 @@ export class RunLogger {
         }
       )
     } catch (error: any) {
-      console.warn(`[${runId}] Failed to store embedding:`, error.message)
+      logger.warn({ err: error.message, runId }, 'Failed to store embedding')
     }
   }
 
@@ -293,7 +294,7 @@ export class RunLogger {
         throw new Error(`HTTP ${response.status}: ${await response.text()}`)
       }
     } catch (error: any) {
-      console.warn(`[${runId}] Failed to save ${artifact.type} artifact to database:`, error.message)
+      logger.warn({ err: error.message, runId, artifactType: artifact.type }, 'Failed to save artifact to database')
     }
   }
 }
