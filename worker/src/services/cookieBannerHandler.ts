@@ -237,8 +237,9 @@ export class CookieBannerHandler {
 
   /**
    * STEP 2: Get platform-specific cookie selectors
+   * Enhanced with EU/UK regional selectors for TCF v2.0, GDPR, and UK ICO compliance
    */
-  private getPlatformSelectors(platform: 'wordpress' | 'shopify' | 'webflow' | 'custom'): string[] {
+  private getPlatformSelectors(platform: 'wordpress' | 'shopify' | 'webflow' | 'custom', region?: 'eu' | 'uk' | 'us' | 'other'): string[] {
     const universalSelectors = [
       // OneTrust (most common)
       '#onetrust-accept-btn-handler',
@@ -256,6 +257,52 @@ export class CookieBannerHandler {
       'button:has-text("Agree")',
       'button:has-text("I Accept")',
       '[aria-label="Accept cookies"]',
+    ]
+
+    // EU/UK Regional Selectors (TCF v2.0, GDPR-specific)
+    const euUkSelectors = [
+      // TCF v2.0 (IAB Framework - very common in EU)
+      '.qc-cmp2-summary-buttons button[mode="primary"]',
+      '[data-testid="GDPR-accept"]',
+      '.fc-cta-consent', // Funding Choices
+      '.fc-button.fc-cta-consent',
+      // Didomi (popular in France/Germany)
+      '#didomi-notice-agree-button',
+      '.didomi-continue-without-agreeing',
+      '#didomi-notice-learn-more-button + button',
+      // Quantcast
+      '.qc-cmp-button[mode="primary"]',
+      '.qc-cmp-ui button.qc-cmp-button',
+      // Sourcepoint
+      '[title="Accept"]',
+      'button[title="AGREE"]',
+      '.sp_choice_type_11',
+      // Osano
+      '.osano-cm-accept-all',
+      '.osano-cm-button--type_accept',
+      // Cookie Script (EU-focused)
+      '#cookiescript_accept',
+      '#cookiescript_acceptAll',
+      // Klaro
+      '.klaro .cm-btn-success',
+      '.klaro .cm-btn-accept-all',
+      // Usercentrics
+      '#uc-btn-accept-banner',
+      '[data-testid="uc-accept-all-button"]',
+      // Axeptio
+      '#axeptio_btn_acceptAll',
+      '.axeptio-btn-accept',
+      // Tarteaucitron
+      '#tarteaucitronPersonalize2',
+      '.tarteaucitronAllow',
+      // UK-specific (UK Cookie Control)
+      '.ccc-accept-close',
+      '#ccc-recommended-settings',
+      '.ccc-notify-button',
+      '#ccc-close',
+      // PECR/UK ICO compliant
+      '[data-cc-event="accept"]',
+      '.cc-accept-all',
     ]
 
     const platformSelectors: Record<string, string[]> = {
@@ -281,6 +328,9 @@ export class CookieBannerHandler {
         // GDPR Cookie Compliance
         '#moove_gdpr_cookie_accept',
         '.moove_gdpr_cookie_modal button.mgbutton',
+        // Real Cookie Banner
+        '#rcb-accept-all',
+        '.rcb-btn-accept-all',
       ],
       shopify: [
         // Shopify Cookie Banner
@@ -296,6 +346,8 @@ export class CookieBannerHandler {
         // Enzuzo
         '.ez-accept-all',
         '#ez-cookie-banner button.ez-accept',
+        // Shopify native (2024+)
+        '[data-cookie-banner-accept]',
       ],
       webflow: [
         // Finsweet Cookie Consent
@@ -312,22 +364,142 @@ export class CookieBannerHandler {
       custom: [],
     }
 
-    // Combine platform-specific + universal selectors
-    return [...(platformSelectors[platform] || []), ...universalSelectors]
+    // Build selector list based on region priority
+    const selectors: string[] = []
+
+    // Add platform-specific first
+    selectors.push(...(platformSelectors[platform] || []))
+
+    // Add EU/UK selectors if in those regions (or always, for broader coverage)
+    if (region === 'eu' || region === 'uk' || !region) {
+      selectors.push(...euUkSelectors)
+    }
+
+    // Add universal selectors last
+    selectors.push(...universalSelectors)
+
+    return selectors
+  }
+
+  /**
+   * Get reject/decline selectors for UK ICO compliance testing
+   * These are used when strategy is 'reject_all'
+   */
+  private getRejectSelectors(): string[] {
+    return [
+      // OneTrust
+      '#onetrust-reject-all-handler',
+      '.onetrust-reject-all-handler',
+      // Cookiebot
+      '#CybotCookiebotDialogBodyButtonDecline',
+      '#CybotCookiebotDialogBodyLevelButtonDecline',
+      // Generic patterns
+      'button:has-text("Reject All")',
+      'button:has-text("Decline All")',
+      'button:has-text("Refuse All")',
+      'button:has-text("Deny All")',
+      'button:has-text("Only Necessary")',
+      'button:has-text("Essential Only")',
+      '[aria-label="Reject cookies"]',
+      '[data-testid="GDPR-reject"]',
+      // Didomi
+      '#didomi-notice-disagree-button',
+      // Quantcast
+      '.qc-cmp-button[mode="secondary"]',
+      // UK Cookie Control
+      '.ccc-reject-close',
+      '#ccc-reject-settings',
+      // Usercentrics
+      '#uc-btn-deny-banner',
+      '[data-testid="uc-deny-all-button"]',
+      // Klaro
+      '.klaro .cm-btn-decline',
+      // Osano
+      '.osano-cm-deny-all',
+    ]
+  }
+
+  /**
+   * Get secondary selectors for multi-step flows
+   * These are clicked AFTER the preferences/settings button
+   */
+  private getSecondarySelectors(): string[] {
+    return [
+      // Save/Confirm buttons (after preferences opened)
+      'button:has-text("Save Settings")',
+      'button:has-text("Save Preferences")',
+      'button:has-text("Confirm Choices")',
+      'button:has-text("Confirm My Choices")',
+      'button:has-text("Save and Close")',
+      'button:has-text("Apply")',
+      '#save-preferences',
+      '.consent-save-btn',
+      '.save-preferences-btn',
+      // OneTrust preferences save
+      '.save-preference-btn-handler',
+      '#onetrust-pc-sdk button.save-preference-btn-handler',
+      // Cookiebot
+      '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowallSelection',
+      // Didomi
+      '.didomi-consent-popup-save-button',
+      // Usercentrics
+      '.uc-save-settings-button',
+    ]
+  }
+
+  /**
+   * STEP 2.5: Detect region from URL/meta tags
+   * Used to prioritize regional selectors
+   */
+  private async detectRegion(page: Page): Promise<'eu' | 'uk' | 'us' | 'other'> {
+    try {
+      const url = page.url()
+
+      // Check TLD first (fastest)
+      if (url.includes('.co.uk') || url.includes('.uk') || url.includes('.gov.uk')) {
+        return 'uk'
+      }
+      if (url.includes('.eu') || url.includes('.de') || url.includes('.fr') ||
+        url.includes('.es') || url.includes('.it') || url.includes('.nl') ||
+        url.includes('.be') || url.includes('.at') || url.includes('.ie')) {
+        return 'eu'
+      }
+      if (url.includes('.com') && !url.includes('.co.')) {
+        // Could be US, but check locale meta
+        const locale = await page.evaluate(() => {
+          const htmlLang = document.documentElement.lang?.toLowerCase()
+          const ogLocale = document.querySelector('meta[property="og:locale"]')?.getAttribute('content')?.toLowerCase()
+          return htmlLang || ogLocale || ''
+        }).catch(() => '')
+
+        if (locale.startsWith('en-gb') || locale.startsWith('en_gb')) return 'uk'
+        if (['de', 'fr', 'es', 'it', 'nl', 'pl', 'pt', 'sv', 'da', 'fi', 'no'].some(l => locale.startsWith(l))) return 'eu'
+        if (locale.startsWith('en-us') || locale.startsWith('en_us')) return 'us'
+      }
+
+      return 'other'
+    } catch (error) {
+      console.warn('[CookieBannerHandler] Region detection failed, defaulting to other')
+      return 'other'
+    }
   }
 
   /**
    * Heuristic Resolution: Platform-aware cookie banner handling
-   * Flow: Detect Platform → Select Selectors → Click → Screenshot Verify → Retry/Proceed
+   * Flow: Detect Platform → Detect Region → Select Selectors → Click → Screenshot Verify → Retry/Proceed
    */
   private async heuristicResolve(page: Page, currentUrl: string): Promise<CookieResolutionResult | null> {
     try {
       // STEP 1: Detect platform
       const platform = await this.detectPlatform(page)
 
-      // STEP 2: Get platform-specific selectors
-      const selectors = this.getPlatformSelectors(platform)
-      this.logEmitter?.log(`Using ${selectors.length} selectors for ${platform} platform`)
+      // STEP 1.5: Detect region for regional selectors
+      const region = await this.detectRegion(page)
+      this.logEmitter?.log(`Detected region: ${region}`)
+
+      // STEP 2: Get platform-specific + regional selectors
+      const selectors = this.getPlatformSelectors(platform, region)
+      this.logEmitter?.log(`Using ${selectors.length} selectors for ${platform} platform (${region} region)`)
 
       // STEP 3: Try each selector
       for (const selector of selectors) {
@@ -981,6 +1153,98 @@ IMPORTANT:
       return Math.abs(beforeCount - afterCount) > 5
     } catch {
       return false
+    }
+  }
+
+  /**
+   * ENHANCEMENT 5: Log failed cookie banner attempts for learning/improvement
+   * This data can be analyzed later to add new selectors for unhandled banners
+   */
+  private async logFailedBanner(
+    page: Page,
+    url: string,
+    selectorsAttempted: string[],
+    region: 'eu' | 'uk' | 'us' | 'other',
+    platform: 'wordpress' | 'shopify' | 'webflow' | 'custom',
+    reason: string
+  ): Promise<void> {
+    try {
+      // Capture minimal DOM info for analysis (cookie-related elements only)
+      const cookieElements = await page.evaluate(() => {
+        const selectors = [
+          '[id*="cookie" i]',
+          '[class*="cookie" i]',
+          '[id*="consent" i]',
+          '[class*="consent" i]',
+          '[id*="gdpr" i]',
+          '[class*="gdpr" i]',
+          '[id*="privacy" i]',
+          '[class*="privacy" i]',
+        ]
+
+        const elements: Array<{
+          tagName: string
+          id: string
+          className: string
+          text: string
+          visible: boolean
+        }> = []
+
+        for (const selector of selectors) {
+          try {
+            const found = document.querySelectorAll(selector)
+            found.forEach(el => {
+              const rect = el.getBoundingClientRect()
+              const style = window.getComputedStyle(el)
+              elements.push({
+                tagName: el.tagName.toLowerCase(),
+                id: el.id || '',
+                className: el.className?.toString?.() || '',
+                text: (el as HTMLElement).innerText?.slice(0, 100) || '',
+                visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+              })
+            })
+          } catch (e) {
+            // Ignore selector errors
+          }
+        }
+
+        // Deduplicate and limit
+        const seen = new Set<string>()
+        return elements.filter(el => {
+          const key = `${el.tagName}#${el.id}.${el.className}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        }).slice(0, 20)
+      }).catch(() => [])
+
+      // Log the failure for future analysis
+      const failureLog = {
+        timestamp: new Date().toISOString(),
+        url: new URL(url).hostname, // Only log hostname for privacy
+        region,
+        platform,
+        selectorsAttempted: selectorsAttempted.slice(0, 10), // Limit for brevity
+        reason,
+        cookieElementsFound: cookieElements.length,
+        sampleElements: cookieElements.slice(0, 5).map(el => ({
+          tag: el.tagName,
+          id: el.id?.slice(0, 50),
+          class: el.className?.slice(0, 50),
+          visible: el.visible,
+        })),
+      }
+
+      // Log to console for now (could be sent to analytics in future)
+      console.log('[CookieBannerHandler] Failed banner logged for learning:', JSON.stringify(failureLog))
+      this.logEmitter?.log('Cookie banner failure logged for future improvement', {
+        hostname: failureLog.url,
+        elementsFound: failureLog.cookieElementsFound
+      })
+    } catch (error) {
+      // Logging should never break the test
+      console.warn('[CookieBannerHandler] Failed to log banner failure:', error)
     }
   }
 
