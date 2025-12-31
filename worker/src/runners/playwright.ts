@@ -42,6 +42,10 @@ export class PlaywrightRunner {
   private gridUrl: string | null
   private sessions: Map<string, RunnerSession> = new Map()
 
+  // Browser pool limit - each Chromium uses ~300MB RAM
+  // At 20 sessions: ~6GB max memory, safe for most servers
+  private readonly MAX_SESSIONS = parseInt(process.env.MAX_BROWSER_SESSIONS || '20', 10)
+
   constructor(gridUrl?: string) {
     // gridUrl is optional - if not provided, use Playwright directly
     this.gridUrl = gridUrl || null
@@ -52,9 +56,15 @@ export class PlaywrightRunner {
    * Creates a real Playwright browser instance
    */
   async reserveSession(profile: TestProfile): Promise<RunnerSession> {
-    console.log('Playwright: Reserving session for profile:', profile.device)
+    // Pool limit check - prevent OOM from too many browsers
+    if (this.sessions.size >= this.MAX_SESSIONS) {
+      throw new Error(`Browser pool exhausted: ${this.sessions.size}/${this.MAX_SESSIONS} sessions active. Try again later.`)
+    }
+
+    console.log(`Playwright: Reserving session for profile: ${profile.device} (${this.sessions.size + 1}/${this.MAX_SESSIONS})`)
 
     const sessionId = `playwright_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
 
     // Determine browser type from device profile
     let browserType = chromium // Default to Chromium

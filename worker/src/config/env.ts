@@ -72,7 +72,9 @@ export const config = {
   },
 
   worker: {
-    concurrency: parseInt(optionalEnv('WORKER_CONCURRENCY', '5'), 10),
+    // Default concurrency increased for production workloads
+    // Each job uses browser pool (limited by MAX_BROWSER_SESSIONS)
+    concurrency: parseInt(optionalEnv('WORKER_CONCURRENCY', '10'), 10),
     maxTestDurationMinutes: parseInt(optionalEnv('MAX_TEST_DURATION_MINUTES', '30'), 10),
     blockUnnecessaryResources: process.env.BLOCK_UNNECESSARY_RESOURCES === 'true',
   },

@@ -154,7 +154,8 @@ export class TestProcessor {
     playwrightRunner: PlaywrightRunner,
     appiumRunner: AppiumRunner | null,
     visionValidator?: VisionValidatorService | null,
-    visionValidatorInterval: number = 0
+    visionValidatorInterval: number = 0,
+    redis?: Redis // Optional - will create if not provided for backward compatibility
   ) {
     this.unifiedBrain = unifiedBrain
     this.storageService = storageService
@@ -164,10 +165,12 @@ export class TestProcessor {
     this.appiumRunner = appiumRunner
     this.visionValidator = visionValidator || null
     this.visionValidatorInterval = visionValidatorInterval
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
+    // Use injected Redis or create new connection (backward compatible)
+    this.redis = redis || new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
     this.apiUrl = config.api.url || process.env.API_URL || 'http://localhost:3001'
     this.comprehensiveTesting = new ComprehensiveTestingService()
     this.testingStrategy = new TestingStrategyService()
+
 
     // Initialize Intelligent Retry Layer (IRL) with UnifiedBrainService
     this.retryLayer = new IntelligentRetryLayer(

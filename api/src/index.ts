@@ -106,10 +106,63 @@ async function registerPlugins() {
 
 // Register routes
 async function registerRoutes() {
-  // Health check
+  // Basic health check (liveness probe)
   fastify.get('/health', async (request, reply) => {
     return { status: 'ok', timestamp: new Date().toISOString() }
   })
+
+  // Liveness probe - is the server running?
+  fastify.get('/health/live', async (request, reply) => {
+    return { status: 'alive', timestamp: new Date().toISOString() }
+  })
+
+  // Readiness probe - are all dependencies ready?
+  fastify.get('/health/ready', async (request, reply) => {
+    const checks: Record<string, { status: string; latencyMs?: number; error?: string }> = {}
+    let allHealthy = true
+
+    // Check Redis
+    try {
+      const start = Date.now()
+      const Redis = require('ioredis')
+      const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+        connectTimeout: 3000,
+        maxRetriesPerRequest: 1,
+      })
+      await redis.ping()
+      await redis.quit()
+      checks.redis = { status: 'healthy', latencyMs: Date.now() - start }
+    } catch (error: any) {
+      checks.redis = { status: 'unhealthy', error: error.message }
+      allHealthy = false
+    }
+
+    // Check Supabase
+    try {
+      const start = Date.now()
+      const { supabase } = await import('./lib/supabase')
+      const { error } = await supabase.from('projects').select('id').limit(1)
+      if (error) throw error
+      checks.supabase = { status: 'healthy', latencyMs: Date.now() - start }
+    } catch (error: any) {
+      checks.supabase = { status: 'unhealthy', error: error.message }
+      allHealthy = false
+    }
+
+    // Check WebSocket
+    checks.websocket = testControlWS
+      ? { status: 'healthy' }
+      : { status: 'unhealthy', error: 'Not initialized' }
+    if (!testControlWS) allHealthy = false
+
+    const statusCode = allHealthy ? 200 : 503
+    return reply.code(statusCode).send({
+      status: allHealthy ? 'ready' : 'not_ready',
+      timestamp: new Date().toISOString(),
+      checks,
+    })
+  })
+
 
   // WebSocket stats (for monitoring)
   fastify.get('/api/ws/stats', async (request, reply) => {

@@ -49,10 +49,10 @@ export class RedisWebSocketManager {
   private connections: Map<string, TestConnection[]> = new Map()
   private serverId: string
   private heartbeatIntervals: Map<WebSocket, NodeJS.Timeout> = new Map()
-  
+
   constructor(server: Server, redisUrl?: string) {
     this.serverId = `api_${process.pid}_${Date.now()}`
-    
+
     // Create Redis clients
     const redisConfig = redisUrl || process.env.REDIS_URL || 'redis://localhost:6379'
     this.redis = new Redis(redisConfig, {
@@ -63,13 +63,13 @@ export class RedisWebSocketManager {
         return delay
       },
     })
-    
+
     this.redisSub = new Redis(redisConfig, {
       maxRetriesPerRequest: 3,
       enableReadyCheck: true,
     })
-    
-    this.wss = new WebSocketServer({ 
+
+    this.wss = new WebSocketServer({
       server,
       path: '/ws/test-control'
     })
@@ -113,8 +113,29 @@ export class RedisWebSocketManager {
 
     // Cleanup stale connections every 2 minutes
     setInterval(() => this.cleanupStaleConnections(), 120000)
-    
+
     console.log(`[${this.serverId}] WebSocket server initialized with Redis backing`)
+  }
+
+  /**
+   * Scan Redis keys using SCAN (non-blocking, O(1) per iteration)
+   * Replaces KEYS command which is O(n) and blocks Redis
+   */
+  private async scanKeys(pattern: string): Promise<string[]> {
+    const keys: string[] = []
+    let cursor = '0'
+
+    do {
+      const [newCursor, batch] = await this.redis.scan(
+        cursor,
+        'MATCH', pattern,
+        'COUNT', 100
+      )
+      cursor = newCursor
+      keys.push(...batch)
+    } while (cursor !== '0')
+
+    return keys
   }
 
   private async handleConnection(ws: WebSocket, req: IncomingMessage) {
@@ -127,14 +148,14 @@ export class RedisWebSocketManager {
       return
     }
 
-    const connection: TestConnection = { 
-      runId, 
-      ws, 
+    const connection: TestConnection = {
+      runId,
+      ws,
       userId: userId || undefined,
       serverId: this.serverId,
       connectedAt: Date.now(),
     }
-    
+
     if (!this.connections.has(runId)) {
       this.connections.set(runId, [])
     }
@@ -145,8 +166,8 @@ export class RedisWebSocketManager {
       await this.redis.setex(
         `ws:connection:${runId}:${this.serverId}:${userId || 'anonymous'}`,
         300, // 5 minute TTL
-        JSON.stringify({ 
-          userId, 
+        JSON.stringify({
+          userId,
           connectedAt: Date.now(),
           serverId: this.serverId,
         })
@@ -174,10 +195,10 @@ export class RedisWebSocketManager {
             `ws:connection:${runId}:${this.serverId}:${userId || 'anonymous'}`,
             300
           )
-          
+
           // Send ping to client
-          ws.send(JSON.stringify({ 
-            type: 'ping', 
+          ws.send(JSON.stringify({
+            type: 'ping',
             timestamp: Date.now(),
             serverId: this.serverId,
           }))
@@ -210,7 +231,7 @@ export class RedisWebSocketManager {
         clearInterval(interval)
         this.heartbeatIntervals.delete(ws)
       }
-      
+
       await this.removeConnection(runId, ws, userId)
       console.log(`[${this.serverId}] WebSocket disconnected: ${runId}`)
     })
@@ -229,13 +250,13 @@ export class RedisWebSocketManager {
             ...message.action,
             timestamp: Date.now(),
           }
-          
+
           await this.redis.rpush(
             `ws:actions:${runId}`,
             JSON.stringify(action)
           )
           await this.redis.expire(`ws:actions:${runId}`, 3600) // 1 hour TTL
-          
+
           // Broadcast via Redis (reaches all servers)
           await this.broadcastViaRedis(runId, {
             type: 'action_queued',
@@ -343,12 +364,12 @@ export class RedisWebSocketManager {
         payload: message,
         serverId: this.serverId,
       }
-      
+
       await this.redis.publish(
         'ws:broadcast',
         JSON.stringify(broadcastData)
       )
-      
+
       // Also broadcast to local connections immediately
       this.broadcastLocal(runId, message)
     } catch (error: any) {
@@ -411,8 +432,8 @@ export class RedisWebSocketManager {
    */
   public async hasActiveConnections(runId: string): Promise<boolean> {
     try {
-      // Check Redis for any active connections
-      const keys = await this.redis.keys(`ws:connection:${runId}:*`)
+      // Check Redis for any active connections using SCAN (non-blocking)
+      const keys = await this.scanKeys(`ws:connection:${runId}:*`)
       return keys.length > 0
     } catch (error: any) {
       console.error(`[${this.serverId}] Failed to check active connections:`, error.message)
@@ -427,15 +448,15 @@ export class RedisWebSocketManager {
    */
   private async cleanupStaleConnections() {
     try {
-      const keys = await this.redis.keys(`ws:connection:*:${this.serverId}:*`)
+      const keys = await this.scanKeys(`ws:connection:*:${this.serverId}:*`)
       console.log(`[${this.serverId}] Active connections: ${keys.length}`)
-      
+
       // Monitor local vs Redis connections
       let localCount = 0
       this.connections.forEach(conns => {
         localCount += conns.length
       })
-      
+
       if (localCount !== keys.length) {
         console.warn(`[${this.serverId}] Connection mismatch: ${localCount} local, ${keys.length} in Redis`)
       }
@@ -452,15 +473,15 @@ export class RedisWebSocketManager {
     this.connections.forEach(conns => {
       localConnections += conns.length
     })
-    
+
     let redisConnections = 0
     try {
-      const keys = await this.redis.keys(`ws:connection:*:${this.serverId}:*`)
+      const keys = await this.scanKeys(`ws:connection:*:${this.serverId}:*`)
       redisConnections = keys.length
     } catch (error) {
       // Ignore
     }
-    
+
     return {
       serverId: this.serverId,
       localConnections,
@@ -475,11 +496,11 @@ export class RedisWebSocketManager {
    */
   public async close() {
     console.log(`[${this.serverId}] Closing WebSocket server...`)
-    
+
     // Clear all heartbeat intervals
     this.heartbeatIntervals.forEach(interval => clearInterval(interval))
     this.heartbeatIntervals.clear()
-    
+
     // Close all WebSocket connections
     this.connections.forEach(conns => {
       conns.forEach(conn => {
@@ -488,17 +509,17 @@ export class RedisWebSocketManager {
         }
       })
     })
-    
+
     // Close WebSocket server
     this.wss.close()
-    
+
     // Unsubscribe from Redis
     await this.redisSub.unsubscribe('ws:broadcast')
-    
+
     // Close Redis connections
     await this.redis.quit()
     await this.redisSub.quit()
-    
+
     console.log(`[${this.serverId}] WebSocket server closed`)
   }
 }
