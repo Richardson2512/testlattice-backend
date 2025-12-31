@@ -5,6 +5,7 @@
 import { FastifyInstance } from 'fastify'
 import { supabase } from '../lib/supabase'
 import { authenticate } from '../middleware/auth'
+import { getAggregatedStats, getModelPricing, saveTokenUsage, TokenUsageRecord } from '../services/tokenUsageService'
 
 // Admin authentication middleware
 async function requireAdmin(request: any, reply: any) {
@@ -302,4 +303,64 @@ export async function adminRoutes(fastify: FastifyInstance) {
             return reply.code(500).send({ error: error.message || 'Failed to get user details' })
         }
     })
+
+    // =========================================================================
+    // TOKEN USAGE STATISTICS
+    // =========================================================================
+
+    // Get aggregated token usage statistics
+    fastify.get('/token-usage', {
+        preHandler: [authenticate, requireAdmin],
+    }, async (request, reply) => {
+        try {
+            const { days = '30' } = request.query as { days?: string }
+            const daysBack = parseInt(days) || 30
+
+            const stats = await getAggregatedStats(daysBack)
+            const pricing = getModelPricing()
+
+            return reply.send({
+                ...stats,
+                pricing,
+                period: {
+                    days: daysBack,
+                    startDate: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString(),
+                    endDate: new Date().toISOString(),
+                },
+            })
+        } catch (error: any) {
+            fastify.log.error(error)
+            return reply.code(500).send({ error: error.message || 'Failed to get token usage stats' })
+        }
+    })
+
+    // Save token usage (called by worker at end of test run)
+    // Note: This endpoint uses service-level auth, not user auth
+    fastify.post('/token-usage/save', {
+        preHandler: [authenticate],
+    }, async (request, reply) => {
+        try {
+            const body = request.body as TokenUsageRecord
+
+            if (!body.testRunId || !body.model) {
+                return reply.code(400).send({ error: 'testRunId and model are required' })
+            }
+
+            await saveTokenUsage({
+                testRunId: body.testRunId,
+                testMode: body.testMode || 'unknown',
+                model: body.model,
+                promptTokens: body.promptTokens || 0,
+                completionTokens: body.completionTokens || 0,
+                totalTokens: body.totalTokens || 0,
+                apiCalls: body.apiCalls || 0,
+            })
+
+            return reply.send({ success: true })
+        } catch (error: any) {
+            fastify.log.error(error)
+            return reply.code(500).send({ error: error.message || 'Failed to save token usage' })
+        }
+    })
 }
+

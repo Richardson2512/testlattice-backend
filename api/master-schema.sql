@@ -410,6 +410,37 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ============================================================================
+-- TOKEN USAGE TRACKING TABLE (Admin Analytics)
+-- ============================================================================
+
+-- Token usage tracking per test run for cost monitoring
+CREATE TABLE IF NOT EXISTS token_usage (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  test_run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+  test_mode TEXT,  -- 'single', 'multi', 'all', 'monkey', 'guest', 'behavior'
+  model TEXT NOT NULL DEFAULT 'gpt-5-mini',  -- 'gpt-5-mini', 'gpt-4o', etc.
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  api_calls INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd DECIMAL(10, 6) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Token usage indexes
+CREATE INDEX IF NOT EXISTS idx_token_usage_test_run_id ON token_usage(test_run_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_test_mode ON token_usage(test_mode);
+CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model);
+CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at DESC);
+
+-- Token usage RLS
+ALTER TABLE token_usage ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Service role full access on token_usage" ON token_usage;
+CREATE POLICY "Service role full access on token_usage" ON token_usage
+  FOR ALL USING (auth.role() = 'service_role');
+
+-- ============================================================================
 -- TRIGGERS
 -- ============================================================================
 

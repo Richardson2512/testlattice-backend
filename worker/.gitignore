@@ -13,3 +13,11 @@ dist/
 
 # Logs
 *.log
+
+# Build artifacts
+tsc_*.txt
+build_*.txt
+payload.json
+
+# Coverage reports
+coverage/

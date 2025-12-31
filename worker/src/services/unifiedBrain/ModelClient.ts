@@ -4,6 +4,9 @@
 
 import axios from 'axios'
 import { ModelMessage, ModelResponse, ModelCallResult } from './types'
+// Observability: AI call tracking
+import { aiEvents, metrics, getTraceContext } from '../../observability'
+import { AIRateLimiter } from '../aiRateLimiter'
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase()
 const DEBUG_LLM = LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true'
@@ -21,6 +24,7 @@ export interface ModelConfig {
 export class ModelClient {
     private config: ModelConfig
     private clientLabel: string
+    private rateLimiter?: AIRateLimiter
 
     // Metrics tracking (ADMIN ONLY - not exposed to users)
     private metrics = {
@@ -33,8 +37,9 @@ export class ModelClient {
         totalTokens: 0,
     }
 
-    constructor(config: ModelConfig) {
+    constructor(config: ModelConfig, rateLimiter?: AIRateLimiter) {
         this.config = config
+        this.rateLimiter = rateLimiter
         this.clientLabel = config.clientLabel || 'Default'
 
         if (DEBUG_LLM) {
@@ -57,6 +62,33 @@ export class ModelClient {
         const maxRetries = 3
         const baseDelayMs = 1000 // 1 second initial delay
         let lastError: Error | null = null
+        const startTime = Date.now()
+
+        // Rate Limiter Check
+        if (this.rateLimiter) {
+            const context = getTraceContext()
+            // Only check limits if we have user context (registered/guest tests)
+            if (context?.userId && context?.userTier) {
+                const estimatedTokens = (prompt.length + systemPrompt.length) / 4 + 500 // Rough estimate + buffer
+                const result = await this.rateLimiter.check(
+                    this.config.model,
+                    context.userId,
+                    context.userTier,
+                    Math.ceil(estimatedTokens)
+                )
+
+                if (!result.allowed) {
+                    aiEvents.rateLimited(this.config.model, context.userId, result.retryAfterMs || 0)
+                    metrics.aiRateLimited(this.config.model, context.userTier)
+
+                    // Don't retry rate limits from our own limiter
+                    throw new Error(result.userMessage || 'Rate limit exceeded')
+                }
+            }
+        }
+
+        // Track AI call start
+        aiEvents.callStarted(this.config.model, task, prompt.length)
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
@@ -70,6 +102,10 @@ export class ModelClient {
                 } catch {
                     // If not JSON, treat as success
                     this.metrics.success++
+                    const duration = Date.now() - startTime
+                    aiEvents.callCompleted(this.config.model, task, response.length, duration)
+                    metrics.aiCalls(this.config.model, 'success')
+                    metrics.aiLatency(this.config.model, duration)
                     return {
                         content: response,
                         model: 'gpt-5-mini', // Type cast not needed if string matches literal type, but keeping it for safety
@@ -79,6 +115,10 @@ export class ModelClient {
                 }
 
                 this.metrics.success++
+                const duration = Date.now() - startTime
+                aiEvents.callCompleted(this.config.model, task, response.length, duration)
+                metrics.aiCalls(this.config.model, 'success')
+                metrics.aiLatency(this.config.model, duration)
                 return {
                     content: response,
                     model: 'gpt-5-mini',
@@ -126,6 +166,8 @@ export class ModelClient {
 
                 // Final failure or non-retryable error
                 this.metrics.failures++
+                aiEvents.callFailed(this.config.model, task, errorMessage)
+                metrics.aiCalls(this.config.model, 'error')
                 console.warn(`[ModelClient][${this.clientLabel}] GPT-5 Mini call failed after ${attempt + 1} attempt(s): ${errorMessage}`)
                 throw new Error(`GPT-5 Mini call failed after ${attempt + 1} attempt(s): ${errorMessage}`)
             }

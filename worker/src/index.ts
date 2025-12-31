@@ -24,6 +24,8 @@ if (process.env.NODE_ENV === 'development') {
 // IMPORTANT: Import Sentry instrument second, after env vars are loaded
 import './instrument'
 
+import { createClient } from '@supabase/supabase-js'
+
 import { Worker } from 'bullmq'
 import IORedis from 'ioredis'
 import * as Sentry from '@sentry/node'
@@ -37,6 +39,10 @@ import { PlaywrightRunner } from './runners/playwright'
 import { AppiumRunner } from './runners/appium'
 import { TestProcessor } from './processors/testProcessor'
 import { VisionValidatorService } from './services/visionValidator'
+import { StateManager } from './services/StateManager'
+import { GuestTestProcessorRefactored } from './processors/GuestTestProcessorRefactored'
+// Import new architecture bootstrap
+import { initializeArchitecture, shutdownArchitecture } from './bootstrap'
 
 // Redis connection with error handling
 // Read directly from process.env first (after dotenv loads) to avoid config caching
@@ -100,7 +106,7 @@ connection.on('reconnecting', (delay: number) => {
 
 // Initialize Unified Brain Service for GUEST tests (GPT-5 Mini)
 // Uses OPENAI_API_KEY - token tracking labeled as [Guest]
-const guestBrain = new UnifiedBrainService()
+const guestBrain = new UnifiedBrainService(connection)
 logger.info('✅ Guest Brain Service initialized (GPT-5 Mini, OPENAI_API_KEY)')
 
 // Initialize Unified Brain Service for REGISTERED tests (GPT-5 Mini)
@@ -111,7 +117,7 @@ if (registeredApiKey) {
   // Temporarily swap API key for registered brain initialization
   const originalKey = process.env.OPENAI_API_KEY
   process.env.OPENAI_API_KEY = registeredApiKey
-  registeredBrain = new UnifiedBrainService()
+  registeredBrain = new UnifiedBrainService(connection)
   process.env.OPENAI_API_KEY = originalKey // Restore
   logger.info('✅ Registered Brain Service initialized (GPT-5 Mini, OPENAI_API_KEY_REGISTERED)')
 } else {
@@ -132,7 +138,10 @@ const supabaseBucket = process.env.SUPABASE_STORAGE_BUCKET || 'artifacts'
 
 // Use service role key (required for storage), fall back to anon key only if service role not available
 // Use service role key (required for storage), fall back to anon key only if service role not available
+// Use service role key (required for storage), fall back to anon key only if service role not available
 const storageKey = supabaseServiceRoleKey || supabaseAnonKey
+const supabase = createClient(supabaseUrl, storageKey)
+const stateManager = new StateManager(connection, supabase)
 
 // Initialize Wasabi storage for heavy artifacts (videos, screenshots, traces)
 import { createWasabiStorage, WasabiStorageService } from './services/wasabiStorage'
@@ -226,31 +235,100 @@ const testProcessor = new TestProcessor(
 
 // Create guest test processor (no diagnosis, simplified flow)
 // Uses SEPARATE brain with OPENAI_API_KEY for isolated billing
-import { GuestTestProcessor } from './processors/GuestTestProcessor'
-const guestProcessor = new GuestTestProcessor(
+// import { GuestTestProcessor } from './processors/GuestTestProcessor'
+/* const guestProcessor = new GuestTestProcessor(
   guestBrain, // Separate brain for guest tests
   storageService,
   playwrightRunner
-)
+) */
 console.log('✅ Guest Test Processor initialized (skip diagnosis, 25-step limit)')
 
 import { BehaviorProcessor } from './processors/behaviorProcessor'
 const behaviorProcessor = new BehaviorProcessor(registeredBrain)
 logger.info('✅ Behavior Processor initialized')
 
+// Helper function to save token usage to API
+async function saveTokenMetrics(runId: string, testMode: string, brain: UnifiedBrainService) {
+  try {
+    const metrics = brain.getMetrics()
+    const apiUrl = config.api.url || process.env.API_URL || 'http://localhost:3001'
+    const model = process.env.OPENAI_MODEL || 'gpt-5-mini'
+
+    const fetch = (await import('node-fetch')).default
+    await fetch(`${apiUrl}/api/admin/token-usage/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        testRunId: runId,
+        testMode: testMode,
+        model: model,
+        promptTokens: metrics.totalPromptTokens || 0,
+        completionTokens: metrics.totalCompletionTokens || 0,
+        totalTokens: metrics.totalTokens || 0,
+        apiCalls: metrics.totalCalls || 0,
+      }),
+    })
+    logger.info({ runId, totalTokens: metrics.totalTokens, apiCalls: metrics.totalCalls }, '📊 Token usage saved')
+  } catch (error: any) {
+    // Don't fail test if token saving fails
+    logger.warn({ runId, err: error.message }, '⚠️ Failed to save token usage (non-blocking)')
+  }
+}
+
+// Refactored Guest Job Processor
+async function processGuestJob(jobData: JobData) {
+  const { runId } = jobData
+  logger.info({ runId }, '🎯 Processing Guest Test Job (Refactored)')
+
+  const profile = jobData.profile || { device: 'desktop_chrome', browser: 'chromium' } as any
+  const session = await playwrightRunner.reserveSession(profile)
+
+  try {
+    const processor = new GuestTestProcessorRefactored(
+      {
+        runId: jobData.runId,
+        url: jobData.build.url || 'about:blank',
+        userId: jobData.runId,
+        userTier: jobData.userTier || 'free',
+        testMode: 'guest',
+        ...jobData.options
+      },
+      {
+        supabase,
+        redis: connection,
+        page: session.page,
+        storage: storageService,
+        runner: playwrightRunner,
+        brain: guestBrain,
+        stateManager
+      }
+    )
+    return await processor.process()
+  } finally {
+    await playwrightRunner.releaseSession(session.id)
+  }
+}
+
 // Worker processor
 async function processTestJob(jobData: JobData) {
   const { runId, options } = jobData
+  const testMode = options?.testMode || 'single'
 
   // Route guest tests to dedicated processor
   if (options?.isGuestRun || options?.testMode === 'guest') {
-    logger.info({ runId }, '🎯 Routing to Guest Test Processor (no diagnosis)')
-    return await guestProcessor.process(jobData)
+    logger.info({ runId }, '🎯 Routing to Guest Test Processor (Refactored)')
+    const result = await processGuestJob(jobData)
+    // Save token usage for guest tests
+    await saveTokenMetrics(runId, 'guest', guestBrain)
+    return result
   }
 
   if (options?.testMode === 'behavior') {
     logger.info({ runId }, '🎯 Routing to Behavior Processor')
-    return await behaviorProcessor.process(jobData)
+    const result = await behaviorProcessor.process(jobData)
+    // Save token usage for behavior tests
+    await saveTokenMetrics(runId, 'behavior', registeredBrain)
+    return result
   }
 
   logger.info({ runId, type: jobData.build.type, device: jobData.profile.device }, 'Processing test job')
@@ -262,6 +340,8 @@ async function processTestJob(jobData: JobData) {
     // If we're waiting for approval, don't mark the run as completed yet
     if (result.stage === 'diagnosis') {
       logger.info({ runId }, 'Diagnosis finished. Awaiting user approval before execution.')
+      // Save partial token usage for diagnosis phase
+      await saveTokenMetrics(runId, `${testMode}_diagnosis`, registeredBrain)
       return {
         success: true,
         runId,
@@ -290,6 +370,9 @@ async function processTestJob(jobData: JobData) {
       logger.error({ runId, err: apiError }, 'Failed to update API')
     }
 
+    // Save token usage after execution completes
+    await saveTokenMetrics(runId, testMode, registeredBrain)
+
     logger.info({
       runId,
       status: result.success ? 'completed' : 'failed',
@@ -306,6 +389,9 @@ async function processTestJob(jobData: JobData) {
     }
   } catch (error: any) {
     logger.error({ runId, err: error }, 'Test job failed')
+
+    // Still try to save token usage on failure
+    await saveTokenMetrics(runId, `${testMode}_failed`, registeredBrain)
 
     // Capture error in Sentry (if configured)
     if (config.sentry.dsn) {
@@ -387,8 +473,8 @@ try {
   guestWorker = new Worker<JobData>(
     'guest-runner',
     async (job: any) => {
-      logger.info({ runId: job.data.runId }, '🎯 Guest worker processing job')
-      return await guestProcessor.process(job.data)
+      logger.info({ runId: job.data.runId }, '🎯 Guest worker processing job (Refactored)')
+      return await processGuestJob(job.data)
     },
     {
       connection,
@@ -533,6 +619,10 @@ async function startWorker() {
     }
 
     logger.info('✅ Redis ping successful')
+
+    // Initialize new architecture modules (config, cleanup jobs, metrics)
+    await initializeArchitecture()
+
     logger.info('✅ Worker started, waiting for jobs...')
     logger.info(`📊 Concurrency: ${config.worker.concurrency || 5}`)
     logger.info(`🌐 Playwright Grid: ${config.testRunners.playwrightGridUrl || 'Not configured'}`)
@@ -627,4 +717,28 @@ async function startWorker() {
 
 // Start worker
 startWorker()
+
+// Graceful shutdown handler
+async function gracefulShutdown(signal: string) {
+  logger.info(`\n${signal} received. Starting graceful shutdown...`)
+
+  try {
+    // Shutdown architecture modules (cleanup jobs, metrics)
+    await shutdownArchitecture()
+
+    // Close Redis connection
+    await connection.quit()
+    logger.info('✅ Redis connection closed')
+
+    logger.info('✅ Graceful shutdown complete')
+    process.exit(0)
+  } catch (error: any) {
+    logger.error({ err: error.message }, '❌ Error during shutdown')
+    process.exit(1)
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+
 

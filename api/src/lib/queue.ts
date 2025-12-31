@@ -153,8 +153,9 @@ export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?:
         }
 
         const jobId = opts?.allowDuplicate ? undefined : `test-${browserJobData.runId}`
+        const priority = (jobData.userTier === 'pro' || jobData.userTier === 'enterprise') ? 10 : 1
         const job = await queue.add('test-run', browserJobData, {
-          priority: 1,
+          priority,
           jobId,
         })
         jobs.push(job)
@@ -170,13 +171,14 @@ export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?:
       }
 
       const jobId = opts?.allowDuplicate ? undefined : `test-${singleJobData.runId}`
+      const priority = (jobData.userTier === 'pro' || jobData.userTier === 'enterprise') ? 10 : 1
       const job = await queue.add('test-run', singleJobData, {
-      priority: 1,
-      jobId,
-    })
+        priority,
+        jobId,
+      })
 
       console.log(`✅ Test run ${singleJobData.runId} enqueued to test-runner (Job ID: ${job.id})`)
-    return job
+      return job
     }
   } catch (error: any) {
     console.error('❌ Failed to enqueue test run:', error.message)

@@ -21,6 +21,9 @@ import {
 import { ModelClient, ModelConfig } from './ModelClient'
 import { PageAnalyzer } from './PageAnalyzer'
 import { ActionGenerator } from './ActionGenerator'
+import Redis from 'ioredis'
+import { AIRateLimiter } from '../aiRateLimiter'
+import { getConfig } from '../../config'
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase()
 const DEBUG_LLM = LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true'
@@ -35,7 +38,7 @@ export class UnifiedBrainService {
     private pageAnalyzer: PageAnalyzer
     private actionGenerator: ActionGenerator
 
-    constructor() {
+    constructor(redis?: Redis) {
         // Determine client label based on which API key is being used
         const registeredApiKey = process.env.OPENAI_API_KEY_REGISTERED
         const currentApiKey = process.env.OPENAI_API_KEY || ''
@@ -56,8 +59,15 @@ export class UnifiedBrainService {
             throw new Error('OPENAI_API_KEY is required for GPT-5 Mini')
         }
 
+        // Initialize Rate Limiter
+        let rateLimiter: AIRateLimiter | undefined
+        if (redis) {
+            const appConfig = getConfig()
+            rateLimiter = new AIRateLimiter(redis, appConfig.features.rateLimiterMode)
+        }
+
         // Create model client (no fallback)
-        this.modelClient = new ModelClient(config)
+        this.modelClient = new ModelClient(config, rateLimiter)
 
         // Create sub-services (no fallback strategy)
         this.pageAnalyzer = new PageAnalyzer(this.modelClient)

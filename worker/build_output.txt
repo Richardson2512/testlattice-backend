@@ -1,5 +1,0 @@
-
-> Rihario-worker@1.0.0 build
-> tsc
-
-src/processors/testProcessor.ts(3549,3): error TS1128: Declaration or statement expected.

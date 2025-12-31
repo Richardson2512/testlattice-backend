@@ -439,6 +439,7 @@ export interface TestArtifact {
 export interface JobData {
   runId: string
   projectId: string
+  userTier?: string
   build: Build
   profile: TestProfile
   options?: TestOptions
