@@ -45,7 +45,8 @@ export const config = {
 
   supabase: {
     url: requireEnv('SUPABASE_URL', 'Supabase project URL'),
-    key: requireEnv('SUPABASE_KEY', 'Supabase anon/public key'),
+    // Relaxed requirement: Allow empty string if user is using Wasabi or only Service Role Key
+    key: process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || '',
     serviceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY', 'Supabase service role key for admin operations'),
   },
 
