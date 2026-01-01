@@ -24,6 +24,7 @@ import { CookieBannerHandler, CookieResolutionResult } from './cookieBannerHandl
 import { NonCookiePopupHandler, NonCookiePopupResult } from './nonCookiePopupHandler'
 import { getExecutionLogEmitter, ExecutionLogEmitter } from './executionLogEmitter'
 import { getCookieStatus, setCookieStatus, CookieStatus } from './cookieStatusTracker'
+import { setPreflightStatus, PreflightStatus } from './preflightInvariants' // Import SetPreflightStatus
 import { UnifiedBrainService } from './unifiedBrainService'
 import { ContextSynthesizer } from '../synthesizers/contextSynthesizer'
 import { ComprehensiveTestingService } from './comprehensiveTesting'
@@ -91,7 +92,8 @@ export class UnifiedPreflightService {
     page: Page,
     currentUrl: string,
     runId: string,
-    buildUrl: string
+    buildUrl: string,
+    sessionId: string = '' // Added sessionId
   ): Promise<PreflightResult> {
     // INVARIANT: Preflight must run exactly once per page
     if (this.pagesProcessed.has(currentUrl)) {
@@ -101,6 +103,9 @@ export class UnifiedPreflightService {
       // ENSURE INVARIANT: Cookie status must be COMPLETED if we skip preflight
       // This prevents context synthesis from failing later
       setCookieStatus(runId, 'COMPLETED')
+      
+      // ENSURE INVARIANT: Preflight status must be COMPLETED
+      setPreflightStatus(runId, 'COMPLETED')
 
       return {
         success: true,
@@ -118,6 +123,9 @@ export class UnifiedPreflightService {
 
     this.logTrace('DETECT', 'Starting unified preflight phase', { url: currentUrl })
     this.logEmitter.log('[Preflight] Starting unified preflight phase', { url: currentUrl })
+
+    // Set preflight status to IN_PROGRESS
+    setPreflightStatus(runId, 'IN_PROGRESS')
 
     const errors: string[] = []
     let cookieResult: CookieResolutionResult | undefined
@@ -147,7 +155,7 @@ export class UnifiedPreflightService {
       // Synthesize context for cookie detection (minimal - no comprehensive testing)
       this.logTrace('CLASSIFY', 'Synthesizing context for popup detection', {})
       const contextResult = await this.contextSynthesizer.synthesizeContext({
-        sessionId: '', // Will be set by caller
+        sessionId: sessionId, // Use passed sessionId
         isMobile: false,
         goal: 'Detect and classify all blocking UI elements (cookie banners, popups, overlays)',
         visitedSelectors: new Set(),
@@ -301,6 +309,9 @@ export class UnifiedPreflightService {
         nonCookiePopups: nonCookiePopups?.popupsDetected.length || 0,
       })
 
+      // Set preflight status to COMPLETED
+      setPreflightStatus(runId, 'COMPLETED')
+
       return {
         success: errors.length === 0,
         cookieResult,
@@ -321,6 +332,7 @@ export class UnifiedPreflightService {
       if (currentStatus === 'IN_PROGRESS') {
         setCookieStatus(runId, 'COMPLETED')
       }
+      setPreflightStatus(runId, 'COMPLETED')
 
       return {
         success: false,

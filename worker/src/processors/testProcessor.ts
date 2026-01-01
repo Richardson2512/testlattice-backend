@@ -1996,7 +1996,7 @@ export class TestProcessor {
         if (config.streaming?.enabled) {
           try {
             // Create browser-specific streamer instance for multi-browser support
-            const browserStreamer = new WebRTCStreamer()
+            const browserStreamer = new WebRTCStreamer(this.redis)
             const streamStatus = await browserStreamer.startStream({
               runId: `${runId}-${browserType}`, // Unique stream ID per browser
               sessionId: session.id,

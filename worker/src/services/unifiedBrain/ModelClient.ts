@@ -59,7 +59,7 @@ export class ModelClient {
         task: 'action' | 'parse' | 'analyze' | 'synthesize' | 'heal'
     ): Promise<ModelCallResult> {
         this.metrics.totalCalls++
-        const maxRetries = 3
+        const maxRetries = 2
         const baseDelayMs = 1000 // 1 second initial delay
         let lastError: Error | null = null
         const startTime = Date.now()

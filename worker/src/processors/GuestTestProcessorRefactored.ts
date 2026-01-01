@@ -18,6 +18,7 @@ import { RageBaitAnalyzer } from '../services/rageBaitAnalyzer'
 import { VerificationInputHandler } from '../services/verificationInputHandler'
 // import { PlaywrightRunner } from '../runners/playwright' // Needed for session?
 import { logger } from '../observability'
+import { getExecutionLogEmitter, ExecutionLogEmitter } from '../services/executionLogEmitter'
 
 // Extended dependencies for Guest Processor
 export interface GuestProcessorDependencies extends ProcessorDependencies {
@@ -25,6 +26,7 @@ export interface GuestProcessorDependencies extends ProcessorDependencies {
     // We might need PlaywrightRunner if we use its session management or specialized methods
     // But ideally we depend on Page only for execution
     runner?: any
+    sessionId: string
 }
 
 export class GuestTestProcessorRefactored extends BaseProcessor {
@@ -38,6 +40,9 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
     private retryLayer: IntelligentRetryLayer
     private comprehensiveTesting: ComprehensiveTestingService
     private rageBaitAnalyzer: RageBaitAnalyzer
+    
+    // Logging
+    private logEmitter: ExecutionLogEmitter
 
     // State
     private visitedSelectors = new Set<string>()
@@ -46,6 +51,7 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
 
     // Captured runner
     private runner: any
+    private sessionId: string
 
     constructor(
         config: BaseProcessorConfig,
@@ -53,8 +59,12 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
     ) {
         super(config, deps)
         this.runner = (deps as any).runner // Capture runner
+        this.sessionId = deps.sessionId
+        this.brain = deps.brain
+        this.sessionId = deps.sessionId
         this.brain = deps.brain
         this.actionExecutor = new ActionExecutor(deps.page)
+        this.logEmitter = getExecutionLogEmitter(this.runId)
 
         // Initialize services
         this.comprehensiveTesting = new ComprehensiveTestingService()
@@ -95,6 +105,9 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
         super.recordStep(action, success, duration, details)
         const step = this.steps[this.steps.length - 1]
         this.broadcastStep(step)
+        
+        // Emit to text log
+        this.logEmitter.log(`[Step ${this.currentStep}] ${action}${success ? '' : ' (Failed)'}`, details)
     }
 
     private broadcastStep(step: any): void {
@@ -117,6 +130,7 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
      */
     protected async execute(): Promise<ProcessResult> {
         logger.info({ runId: this.runId }, 'Starting Guest Test Execution')
+        this.logEmitter.log('Starting Guest Test Execution')
 
         // 1. Preflight
         await this.runPreflight()
@@ -155,7 +169,7 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
             // Synthesize Context
             const contextStart = Date.now()
             const context = await this.contextSynthesizer.synthesizeContext({
-                sessionId: 'session', // Placeholder
+                sessionId: this.sessionId,
                 isMobile: false,
                 goal,
                 visitedSelectors: this.visitedSelectors,
@@ -244,12 +258,14 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
             this.deps.page,
             this.url,
             this.runId,
-            this.url
+            this.url,
+            this.sessionId
         )
     }
 
     private async executeRageBait(goal: string): Promise<ProcessResult> {
         logger.info({ runId: this.runId }, 'Starting Rage Bait Test')
+        this.logEmitter.log('Starting Rage Bait Analysis (looking for forms/interactive elements)...')
 
         try {
             const summary = await this.rageBaitAnalyzer.runAllTests(

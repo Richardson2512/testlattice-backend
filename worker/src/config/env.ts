@@ -57,7 +57,7 @@ export const config = {
   openai: {
     apiUrl: optionalEnv("OPENAI_API_URL", "https://api.openai.com/v1"),
     apiKey: optionalEnv("OPENAI_API_KEY", ""),
-    model: optionalEnv("OPENAI_MODEL", "gpt-5-mini"),
+    model: optionalEnv("OPENAI_MODEL", "gpt-4o"),
     temperature: parseFloat(optionalEnv("OPENAI_TEMPERATURE", "0.3")),
     maxTokens: parseInt(optionalEnv("OPENAI_MAX_TOKENS", "4096"), 10),
     orgId: optionalEnv("OPENAI_ORG_ID", ""),
@@ -164,7 +164,7 @@ export const config = {
 
   // Intelligent Retry Layer (IRL) configuration
   irl: {
-    maxRetries: parseInt(optionalEnv("IRL_MAX_RETRIES", "3"), 10),
+    maxRetries: parseInt(optionalEnv("IRL_MAX_RETRIES", "2"), 10),
     initialDelay: parseInt(optionalEnv("IRL_INITIAL_DELAY", "500"), 10),
     maxDelay: parseInt(optionalEnv("IRL_MAX_DELAY", "5000"), 10),
     enableVisionMatching: process.env.IRL_ENABLE_VISION_MATCHING !== "false",

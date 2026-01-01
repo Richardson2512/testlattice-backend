@@ -277,12 +277,38 @@ async function saveTokenMetrics(runId: string, testMode: string, brain: UnifiedB
 }
 
 // Refactored Guest Job Processor
+import { WebRTCStreamer } from './services/webrtcStreamer'
+
 async function processGuestJob(jobData: JobData) {
   const { runId } = jobData
   logger.info({ runId }, '🎯 Processing Guest Test Job (Refactored)')
 
   const profile = jobData.profile || { device: 'desktop_chrome', browser: 'chromium' } as any
   const session = await playwrightRunner.reserveSession(profile)
+
+  // Initialize Streamer (Visual Vibe)
+  const streamer = new WebRTCStreamer(connection)
+  try {
+    const livekitUrl = process.env.LIVEKIT_URL || config.streaming.livekitUrl
+    const livekitApiKey = process.env.LIVEKIT_API_KEY || config.streaming.livekitApiKey
+    const livekitApiSecret = process.env.LIVEKIT_API_SECRET || config.streaming.livekitApiSecret
+    
+    // Start streaming (HTTP MJPEG + Redis Broadcast for WebSockets)
+    await streamer.startStream({
+      runId,
+      sessionId: session.id,
+      page: session.page,
+      livekitUrl,
+      livekitApiKey,
+      livekitApiSecret,
+      // If running locally with remote API, MJPEG URL (localhost) won't work for frontend
+      // But Redis broadcast (base64 frames) WILL work if Redis is shared
+      frameServerPort: 0 
+    })
+    logger.info({ runId }, '🎥 Visual Streamer started')
+  } catch (streamError: any) {
+    logger.warn({ runId, error: streamError.message }, '⚠️ Failed to start visual streamer')
+  }
 
   try {
     const processor = new GuestTestProcessorRefactored(
@@ -301,11 +327,13 @@ async function processGuestJob(jobData: JobData) {
         storage: storageService,
         runner: playwrightRunner,
         brain: guestBrain,
-        stateManager
+        stateManager,
+        sessionId: session.id
       }
     )
     return await processor.process()
   } finally {
+    await streamer.stopStream().catch(e => logger.warn({ err: e.message }, 'Failed to stop streamer'))
     await playwrightRunner.releaseSession(session.id)
   }
 }
@@ -319,6 +347,46 @@ async function processTestJob(jobData: JobData) {
   if (options?.isGuestRun || options?.testMode === 'guest') {
     logger.info({ runId }, '🎯 Routing to Guest Test Processor (Refactored)')
     const result = await processGuestJob(jobData)
+
+    // Update test run status via API (Reporting)
+    const apiUrl = config.api.url || process.env.API_URL || 'http://localhost:3001'
+    const updateStatus = result.success ? TestRunStatus.COMPLETED : TestRunStatus.FAILED
+
+    // Upload Report to Wasabi
+    let reportUrl = ''
+    if (wasabiStorage) {
+      try {
+        const reportData = {
+          runId,
+          status: updateStatus,
+          steps: result.steps,
+          completedAt: new Date().toISOString(),
+          options: jobData.options
+        }
+        reportUrl = await wasabiStorage.uploadJson(`runs/${runId}/report.json`, reportData)
+        logger.info({ runId, reportUrl }, '✅ Uploaded test report to Wasabi')
+      } catch (e: any) {
+        logger.warn({ runId, error: e.message }, '⚠️ Failed to upload report to Wasabi')
+      }
+    }
+
+    try {
+      const fetch = (await import('node-fetch')).default
+      await fetch(`${apiUrl}/api/tests/${runId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: updateStatus,
+          steps: result.steps,
+          completedAt: new Date().toISOString(),
+          reportUrl // Include Wasabi URL
+        }),
+      })
+      logger.info({ runId, status: updateStatus }, '✅ Guest test report saved to API')
+    } catch (apiError) {
+      logger.error({ runId, err: apiError }, '❌ Failed to save guest test report to API')
+    }
+
     // Save token usage for guest tests
     await saveTokenMetrics(runId, 'guest', guestBrain)
     return result

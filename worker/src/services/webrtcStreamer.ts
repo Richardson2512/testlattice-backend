@@ -40,14 +40,21 @@ export class WebRTCStreamer extends EventEmitter {
   private frameCount: number = 0
   private redis: Redis
   private lastBroadcastTime: number = 0
+  private shouldQuitRedis: boolean = true
 
   /**
    * Start streaming a Playwright page
    * MVP: HTTP-based frame streaming (upgradeable to WebRTC)
    */
-  constructor() {
+  constructor(redisClient?: Redis) {
     super()
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
+    if (redisClient) {
+      this.redis = redisClient
+      this.shouldQuitRedis = false
+    } else {
+      this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
+      this.shouldQuitRedis = true
+    }
   }
 
   async startStream(config: StreamConfig): Promise<StreamStatus> {
@@ -129,6 +136,13 @@ export class WebRTCStreamer extends EventEmitter {
       this.roomName = null
       this.latestFrame = null
       this.frameCount = 0
+
+      // Close Redis connection only if we created it
+      if (this.redis && this.shouldQuitRedis) {
+        await this.redis.quit().catch(err => {
+            console.error('[WebRTC] Error closing Redis connection:', err)
+        })
+      }
 
       this.emit('stopped')
       console.log('[WebRTC] Stream stopped')
