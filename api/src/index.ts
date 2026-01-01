@@ -87,7 +87,7 @@ async function registerPlugins() {
   const corsOrigins = allowedOrigins.length > 0 ? allowedOrigins : (config.nodeEnv === 'development' ? ['http://127.0.0.1:3000'] : [config.appUrl || '*'])
 
   await fastify.register(cors, {
-    origin: corsOrigins,
+    origin: true, // Allow all origins (simpler for production debugging)
     credentials: true,
     // Allow all headers and methods for downloads
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
