@@ -22,6 +22,7 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // IMPORTANT: Import Sentry instrument second, after env vars are loaded
+import 'reflect-metadata'
 import './instrument'
 
 import { createClient } from '@supabase/supabase-js'
