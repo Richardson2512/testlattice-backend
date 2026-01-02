@@ -134,7 +134,38 @@ export async function billingRoutes(fastify: FastifyInstance) {
       switch (payload.type) {
         case 'checkout.created':
         case 'checkout.updated':
-          fastify.log.info(`Checkout event: ${payload.data.id}`)
+        case 'order.created': // Handle one-time purchases too
+          fastify.log.info(`Checkout/Order event: ${payload.data.id}`)
+
+          // WAITLIST INTEGRATION: Update waitlist status if email matches
+          try {
+            const data = payload.data
+            const email = (data.customer_email || data.user?.email || data.email)?.toLowerCase()
+
+            if (email) {
+              const supabase = await getSupabaseClient()
+
+              // Upsert to waitlist table
+              const { error: waitlistError } = await supabase
+                .from('waitlist')
+                .upsert({
+                  email: email,
+                  status: 'paid',
+                  paid_at: new Date().toISOString(),
+                  order_id: data.id,
+                  amount: data.amount,
+                  metadata: data
+                }, { onConflict: 'email' })
+
+              if (waitlistError) {
+                fastify.log.error(`Waitlist update failed for ${email}: ${waitlistError.message}`)
+              } else {
+                fastify.log.info(`Waitlist status updated to PAID for ${email}`)
+              }
+            }
+          } catch (err: any) {
+            fastify.log.error(`Waitlist integration error: ${err.message}`)
+          }
           break
 
         case 'subscription.created':

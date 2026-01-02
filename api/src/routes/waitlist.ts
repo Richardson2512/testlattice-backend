@@ -49,43 +49,9 @@ export async function waitlistRoutes(fastify: FastifyInstance) {
         }
     })
 
-    // POST /api/waitlist/webhook
-    fastify.post('/webhook', async (request, reply) => {
-        try {
-            const event = request.body as any
-            fastify.log.info(`Waitlist Webhook: ${event.type}`)
-
-            if (event.type === 'checkout.created' || event.type === 'order.created') {
-                const data = event.data
-                const email = (data.customer_email || data.user?.email || data.email)?.toLowerCase()
-
-                if (email) {
-                    // Upsert: Create if not exists, Update if exists
-                    const { error } = await supabase
-                        .from('waitlist')
-                        .upsert({
-                            email: email,
-                            status: 'paid',
-                            paid_at: new Date().toISOString(),
-                            order_id: data.id,
-                            amount: data.amount,
-                            metadata: data // Store full event data if useful
-                        }, { onConflict: 'email' })
-
-                    if (error) {
-                        fastify.log.error(`Failed to update paid status for ${email}: ${error.message}`)
-                    } else {
-                        fastify.log.info(`Marked ${email} as PAID via webhook`)
-                    }
-                }
-            }
-
-            return reply.send({ received: true })
-        } catch (error: any) {
-            fastify.log.error(error)
-            return reply.code(500).send({ error: 'Webhook failed' })
-        }
-    })
+    // POST /api/waitlist/webhook - MOVED TO billing.ts
+    // We merged the logic into the main billing webhook to use a single endpoint for Polar.sh
+    // fastify.post('/webhook', ...)
 
     // GET /api/waitlist/stats
     fastify.get('/stats', async (request, reply) => {
