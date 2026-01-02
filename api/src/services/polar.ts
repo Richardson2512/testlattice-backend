@@ -49,10 +49,12 @@ export async function createCheckoutSession(params: {
 }): Promise<{ checkoutUrl: string; checkoutId: string }> {
     const polar = getPolarClient()
 
-    // Per Polar API spec: products is an array of UUID strings
+    // Per Polar API spec
     const checkout = await polar.checkouts.create({
         products: [params.productId], // Array of product UUID strings
         successUrl: params.successUrl,
+        customerEmail: params.customerEmail, // Pre-fill email
+        metadata: params.metadata, // Attach metadata
     } as any)
 
     return {
