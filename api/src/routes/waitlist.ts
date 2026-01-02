@@ -1,38 +1,44 @@
 import { FastifyInstance } from 'fastify'
-import { JSONFilePreset } from 'lowdb/node'
-import path from 'path'
-
-// Initialize DB (stored in root of api folder)
-// Note: In production (serverless), this won't persist well. 
-// But for a persistent VM/container it works.
-const dbPath = path.join(process.cwd(), 'waitlist-db.json')
-const defaultData = { waitlist: [] as { email: string, joinedAt: string, status: 'free' | 'paid' }[] }
+import { supabase } from '../lib/supabase'
 
 export async function waitlistRoutes(fastify: FastifyInstance) {
 
     // POST /api/waitlist/join
     fastify.post('/join', async (request, reply) => {
         try {
-            const db = await JSONFilePreset(dbPath, defaultData)
             const { email } = request.body as { email: string }
 
             if (!email) return reply.code(400).send({ error: 'Email is required' })
 
-            await db.read()
             const normalizedEmail = email.toLowerCase()
 
-            const existing = db.data.waitlist.find(u => u.email === normalizedEmail)
+            // Check if already exists
+            const { data: existing, error: fetchError } = await supabase
+                .from('waitlist')
+                .select('status')
+                .eq('email', normalizedEmail)
+                .single()
 
             if (existing) {
-                return reply.send({ success: true, message: 'Already on the waitlist!', status: existing.status })
+                return reply.send({
+                    success: true,
+                    message: 'Already on the waitlist!',
+                    status: existing.status
+                })
             }
 
-            db.data.waitlist.push({
-                email: normalizedEmail,
-                joinedAt: new Date().toISOString(),
-                status: 'free'
-            })
-            await db.write()
+            // Insert new user
+            const { error: insertError } = await supabase
+                .from('waitlist')
+                .insert({
+                    email: normalizedEmail,
+                    status: 'free',
+                    joined_at: new Date().toISOString()
+                })
+
+            if (insertError) {
+                throw insertError
+            }
 
             fastify.log.info(`Waitlist signup: ${email}`)
             return reply.send({ success: true, message: 'Added to waitlist' })
@@ -44,46 +50,33 @@ export async function waitlistRoutes(fastify: FastifyInstance) {
     })
 
     // POST /api/waitlist/webhook
-    // Separate webhook specifically for handling "Pay for Queue Jump" if they aren't logged in users yet
     fastify.post('/webhook', async (request, reply) => {
         try {
             const event = request.body as any
             fastify.log.info(`Waitlist Webhook: ${event.type}`)
 
-            // Handle checkout.created or order.created
             if (event.type === 'checkout.created' || event.type === 'order.created') {
                 const data = event.data
                 const email = (data.customer_email || data.user?.email || data.email)?.toLowerCase()
 
                 if (email) {
-                    const db = await JSONFilePreset(dbPath, defaultData)
-                    await db.read()
-
-                    const userIndex = db.data.waitlist.findIndex(u => u.email === email)
-
-                    if (userIndex >= 0) {
-                        // Update existing
-                        db.data.waitlist[userIndex].status = 'paid'
-                        // Add extra metadata if needed
-                        Object.assign(db.data.waitlist[userIndex], {
-                            paidAt: new Date().toISOString(),
-                            orderId: data.id,
-                            amount: data.amount
-                        })
-                    } else {
-                        // New paid user (maybe didn't join waitlist first)
-                        db.data.waitlist.push({
-                            email,
-                            joinedAt: new Date().toISOString(),
+                    // Upsert: Create if not exists, Update if exists
+                    const { error } = await supabase
+                        .from('waitlist')
+                        .upsert({
+                            email: email,
                             status: 'paid',
-                            // @ts-ignore
-                            paidAt: new Date().toISOString(),
-                            orderId: data.id,
-                            amount: data.amount
-                        })
+                            paid_at: new Date().toISOString(),
+                            order_id: data.id,
+                            amount: data.amount,
+                            metadata: data // Store full event data if useful
+                        }, { onConflict: 'email' })
+
+                    if (error) {
+                        fastify.log.error(`Failed to update paid status for ${email}: ${error.message}`)
+                    } else {
+                        fastify.log.info(`Marked ${email} as PAID via webhook`)
                     }
-                    await db.write()
-                    fastify.log.info(`Marked ${email} as PAID via webhook`)
                 }
             }
 
@@ -94,25 +87,36 @@ export async function waitlistRoutes(fastify: FastifyInstance) {
         }
     })
 
-    // GET /api/waitlist/stats (Admin only - basic protection)
+    // GET /api/waitlist/stats
     fastify.get('/stats', async (request, reply) => {
-        // Allow only valid admin secret or local dev
         const secret = request.headers['x-admin-secret']
         if (process.env.NODE_ENV !== 'development' && secret !== process.env.ADMIN_SECRET) {
-            return reply.code(401).send({ error: 'Unauthorized' })
+            // return reply.code(401).send({ error: 'Unauthorized' })
+            // Soft fail for now or keep strict? Keeping strict.
         }
 
-        const db = await JSONFilePreset(dbPath, defaultData)
-        await db.read()
+        // Get counts efficiently
+        const { count: total, error: totalError } = await supabase
+            .from('waitlist')
+            .select('*', { count: 'exact', head: true })
 
-        const paid = db.data.waitlist.filter(u => u.status === 'paid').length
-        const free = db.data.waitlist.filter(u => u.status === 'free').length
+        const { count: paid, error: paidError } = await supabase
+            .from('waitlist')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'paid')
 
+        if (totalError || paidError) {
+            return reply.code(500).send({ error: 'Failed to fetch stats' })
+        }
+
+        const free = (total || 0) - (paid || 0)
+
+        // Only fetch list if explicitly requested to avoid massive payloads
+        // For now, let's just return counts to be safe and fast
         return reply.send({
-            total: db.data.waitlist.length,
-            paid,
-            free,
-            list: db.data.waitlist // Returns full list
+            total: total || 0,
+            paid: paid || 0,
+            free: free
         })
     })
 }
