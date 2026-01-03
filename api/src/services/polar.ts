@@ -49,17 +49,33 @@ export async function createCheckoutSession(params: {
 }): Promise<{ checkoutUrl: string; checkoutId: string }> {
     const polar = getPolarClient()
 
-    // Per Polar API spec
-    const checkout = await polar.checkouts.create({
-        products: [params.productId], // Array of product UUID strings
-        successUrl: params.successUrl,
-        customerEmail: params.customerEmail, // Pre-fill email
-        metadata: params.metadata, // Attach metadata
-    } as any)
+    console.log(`Creating Polar checkout for product: ${params.productId}, email: ${params.customerEmail}`);
 
-    return {
-        checkoutUrl: checkout.url,
-        checkoutId: checkout.id,
+    try {
+        // Per Polar API spec
+        // Note: Check if the SDK version expects 'product_id' or 'products'
+        const checkout = await polar.checkouts.create({
+            productId: params.productId, // Try singular if plural failed, or check SDK docs. 
+            // Most recent Polar SDK uses 'productId' for single product or 'products' array.
+            // Let's try matching the product exactly.
+            successUrl: params.successUrl,
+            customerEmail: params.customerEmail,
+            metadata: params.metadata,
+        } as any)
+
+        console.log("Polar Checkout created:", checkout);
+
+        if (!checkout || !checkout.url) {
+            throw new Error(`Polar API returned no URL. ID: ${checkout?.id}`);
+        }
+
+        return {
+            checkoutUrl: checkout.url,
+            checkoutId: checkout.id,
+        }
+    } catch (error: any) {
+        console.error("Polar SDK Error:", error);
+        throw new Error(`Polar Checkout Failed: ${error.message || JSON.stringify(error)}`);
     }
 }
 
