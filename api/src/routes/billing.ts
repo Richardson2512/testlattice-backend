@@ -90,7 +90,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'Product ID or tier is required' })
       }
 
-      const appUrl = config.appUrl || process.env.APP_URL || 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app'
+      const appUrl = (config.appUrl || process.env.APP_URL || 'https://Rihario-7ip77vn43-pricewises-projects.vercel.app').replace(/\/$/, '')
 
       // Determine success URL based on product/tier
       const tierFromProduct = getTierFromProductId(targetProductId)

@@ -53,11 +53,9 @@ export async function createCheckoutSession(params: {
 
     try {
         // Per Polar API spec
-        // Note: Check if the SDK version expects 'product_id' or 'products'
+        // SDK requires 'products' array, not singular 'productId'
         const checkout = await polar.checkouts.create({
-            productId: params.productId, // Try singular if plural failed, or check SDK docs. 
-            // Most recent Polar SDK uses 'productId' for single product or 'products' array.
-            // Let's try matching the product exactly.
+            products: [params.productId], // Must be an array of strings
             successUrl: params.successUrl,
             customerEmail: params.customerEmail,
             metadata: params.metadata,
