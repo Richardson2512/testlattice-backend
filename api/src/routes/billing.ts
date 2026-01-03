@@ -100,10 +100,18 @@ export async function billingRoutes(fastify: FastifyInstance) {
         productId: targetProductId,
         customerEmail: userEmail,
         successUrl,
-        metadata: {
-          userId: userId || '',
-          tier: tierFromProduct,
-        },
+        const metadata: Record<string, string> = {
+        tier: tierFromProduct,
+      }
+      if (userId) {
+        metadata.userId = userId
+      }
+
+      const { checkoutUrl, checkoutId } = await createCheckoutSession({
+        productId: targetProductId,
+        customerEmail: userEmail,
+        successUrl,
+        metadata,
       })
 
       fastify.log.info(`Checkout session created: ${checkoutId} for tier ${tierFromProduct}`)
