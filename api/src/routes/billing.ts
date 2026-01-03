@@ -96,13 +96,12 @@ export async function billingRoutes(fastify: FastifyInstance) {
       const tierFromProduct = getTierFromProductId(targetProductId)
       const successUrl = `${appUrl}/dashboard?checkout=success&tier=${tierFromProduct}`
 
-      const { checkoutUrl, checkoutId } = await createCheckoutSession({
-        productId: targetProductId,
-        customerEmail: userEmail,
-        successUrl,
-        const metadata: Record<string, string> = {
+      // Prepare metadata
+      const metadata: Record<string, string> = {
         tier: tierFromProduct,
       }
+      // Only include userId if it exists (authenticated flow)
+      // Otherwise omit it to pass Polar validation (anonymous waitlist flow)
       if (userId) {
         metadata.userId = userId
       }
