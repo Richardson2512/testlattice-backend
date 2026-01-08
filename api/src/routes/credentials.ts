@@ -1,6 +1,6 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { AuthenticatedRequest, requireAuth } from '../middleware/auth'
-import { Database } from '../lib/db'
+import { supabase } from '../lib/supabase'
 import { z } from 'zod'
 
 const CreateCredentialSchema = z.object({
@@ -25,7 +25,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
         preHandler: requireAuth,
     }, async (request: AuthenticatedRequest, reply) => {
         try {
-            const { data: credentials, error } = await Database.supabase
+            const { data: credentials, error } = await supabase
                 .from('test_credentials')
                 .select('*')
                 .eq('user_id', request.user!.id)
@@ -47,11 +47,10 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
         try {
             const body = CreateCredentialSchema.parse(request.body)
 
-            // Encrypt password (placeholder - using simple text for now as per plan, but field is named encrypted)
-            // In a real scenario, we would use a symmetric encryption key from env
+            // Encrypt password (placeholder - using simple text for now as per plan)
             const password_encrypted = body.password
 
-            const { data: credential, error } = await Database.supabase
+            const { data: credential, error } = await supabase
                 .from('test_credentials')
                 .insert({
                     user_id: request.user!.id,
@@ -80,7 +79,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     // Update Credential
     fastify.put<{ Params: { id: string } }>('/:id', {
         preHandler: requireAuth,
-    }, async (request: AuthenticatedRequest, reply) => {
+    }, async (request: FastifyRequest<{ Params: { id: string } }> & AuthenticatedRequest, reply) => {
         try {
             const { id } = request.params
             const body = UpdateCredentialSchema.parse(request.body)
@@ -91,7 +90,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
                 delete updates.password
             }
 
-            const { data: credential, error } = await Database.supabase
+            const { data: credential, error } = await supabase
                 .from('test_credentials')
                 .update(updates)
                 .eq('id', id)
@@ -111,11 +110,11 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     // Delete Credential
     fastify.delete<{ Params: { id: string } }>('/:id', {
         preHandler: requireAuth,
-    }, async (request: AuthenticatedRequest, reply) => {
+    }, async (request: FastifyRequest<{ Params: { id: string } }> & AuthenticatedRequest, reply) => {
         try {
             const { id } = request.params
 
-            const { error } = await Database.supabase
+            const { error } = await supabase
                 .from('test_credentials')
                 .delete()
                 .eq('id', id)
