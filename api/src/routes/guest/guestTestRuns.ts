@@ -2,6 +2,7 @@
 import { FastifyInstance } from 'fastify'
 import { CreateGuestTestRunRequest, TestRunStatus, DeviceProfile, BuildType, GuestTestType, GuestCredentials } from '../../types'
 import { Database } from '../../lib/db'
+import { supabase } from '../../lib/supabase'
 import { enqueueGuestTestRun } from '../../lib/queue'
 import { AuthenticatedRequest, optionalAuth } from '../../middleware/auth'
 import { validateTestUrl, generateGuestSessionId, getGuestSessionFromCookie, setGuestSessionCookie } from '../../lib/urlValidator'
@@ -138,6 +139,25 @@ export async function guestTestRunRoutes(fastify: FastifyInstance) {
         status: TestRunStatus.PENDING,
         guestSessionId,
       })
+
+      // Auto-save credentials if provided and user is authenticated or guest session is tracked
+      if (credentials && (credentials.username || credentials.email) && credentials.password) {
+        try {
+          await supabase.from('test_credentials').insert({
+            user_id: request.user?.id || null, // Link to user if logged in
+            project_id: guestProject.id,
+            name: `Guest Test Credential - ${new Date().toLocaleTimeString()}`,
+            username: credentials.username || null,
+            email: credentials.email || null,
+            password_encrypted: credentials.password,
+            guest_session_id: guestSessionId, // Link to guest session
+          })
+          fastify.log.info(`Saved guest credentials for session ${guestSessionId}`)
+        } catch (credError: any) {
+          fastify.log.warn({ err: credError.message }, 'Failed to auto-save guest credentials')
+          // Non-blocking error
+        }
+      }
 
       // Enqueue job to guest-runner queue (separate from main test-runner)
       try {

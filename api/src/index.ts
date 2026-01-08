@@ -49,6 +49,7 @@ import { fixPromptRoutes } from './routes/fixPrompts'
 import { adminRoutes } from './routes/admin'
 import { behaviorRoutes } from './routes/behavior'
 import { waitlistRoutes } from './routes/waitlist'
+import { credentialsRoutes } from './routes/credentials'
 import { TestControlWebSocket } from './lib/websocket'
 import { RedisWebSocketManager } from './lib/websocketRedis'
 import { startCleanupScheduler } from './jobs/cleanupArtifacts'
@@ -239,6 +240,9 @@ async function registerRoutes() {
 
     // Rihario Waitlist routes
     await fastify.register(waitlistRoutes, { prefix: '/api/waitlist' })
+
+    // Credentials routes
+    await fastify.register(credentialsRoutes, { prefix: '/api/credentials' })
   }, { prefix: '' })
 
   // Set up Sentry error handler (must be after all routes)

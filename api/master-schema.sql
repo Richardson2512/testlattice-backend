@@ -441,6 +441,41 @@ CREATE POLICY "Service role full access on token_usage" ON token_usage
   FOR ALL USING (auth.role() = 'service_role');
 
 -- ============================================================================
+-- TEST CREDENTIALS TABLE
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS test_credentials (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  username VARCHAR(255),
+  email VARCHAR(255),
+  password_encrypted TEXT,
+  guest_session_id VARCHAR(255),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Test Credentials RLS
+ALTER TABLE test_credentials ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role full access on test_credentials" ON test_credentials
+  FOR ALL USING (auth.role() = 'service_role');
+
+CREATE POLICY "Users can view own credentials" ON test_credentials
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can create own credentials" ON test_credentials
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own credentials" ON test_credentials
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own credentials" ON test_credentials
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- ============================================================================
 -- TRIGGERS
 -- ============================================================================
 
