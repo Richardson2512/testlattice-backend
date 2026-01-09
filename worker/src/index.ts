@@ -285,16 +285,17 @@ async function processGuestJob(jobData: JobData) {
 
   const profile = jobData.profile || { device: 'desktop_chrome', browser: 'chromium' } as any
   const session = await playwrightRunner.reserveSession(profile)
+  logger.info({ runId, sessionId: session.id }, '✅ Session reserved')
 
   // Initialize Streamer (Visual Vibe)
-  const streamer = new WebRTCStreamer(connection)
+  const streamer = new WebRTCStreamer()
   try {
     const livekitUrl = process.env.LIVEKIT_URL || config.streaming.livekitUrl
     const livekitApiKey = process.env.LIVEKIT_API_KEY || config.streaming.livekitApiKey
     const livekitApiSecret = process.env.LIVEKIT_API_SECRET || config.streaming.livekitApiSecret
     
     // Start streaming (HTTP MJPEG + Redis Broadcast for WebSockets)
-    await streamer.startStream({
+    const status = await streamer.startStream({
       runId,
       sessionId: session.id,
       page: session.page,
@@ -305,7 +306,7 @@ async function processGuestJob(jobData: JobData) {
       // But Redis broadcast (base64 frames) WILL work if Redis is shared
       frameServerPort: 0 
     })
-    logger.info({ runId }, '🎥 Visual Streamer started')
+    logger.info({ runId, streamUrl: status.streamUrl }, '✅ Stream started successfully')
   } catch (streamError: any) {
     logger.warn({ runId, error: streamError.message }, '⚠️ Failed to start visual streamer')
   }
@@ -331,7 +332,10 @@ async function processGuestJob(jobData: JobData) {
         sessionId: session.id
       }
     )
-    return await processor.process()
+    logger.info({ runId }, '🚀 Starting Guest Processor Execution')
+    const result = await processor.process()
+    logger.info({ runId, success: result.success }, '🏁 Guest Processor Execution Completed')
+    return result
   } finally {
     await streamer.stopStream().catch(e => logger.warn({ err: e.message }, 'Failed to stop streamer'))
     await playwrightRunner.releaseSession(session.id)

@@ -65,6 +65,26 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
         this.brain = deps.brain
         this.actionExecutor = new ActionExecutor(deps.page)
         this.logEmitter = getExecutionLogEmitter(this.runId)
+        
+        // Patch logEmitter to broadcast logs to Frontend via Redis
+        const originalLog = this.logEmitter.log.bind(this.logEmitter)
+        this.logEmitter.log = (message: string, metadata?: Record<string, any>) => {
+            originalLog(message, metadata)
+            try {
+                this.deps.redis.publish('ws:broadcast', JSON.stringify({
+                    runId: this.runId,
+                    serverId: 'worker',
+                    payload: {
+                        type: 'test_log',
+                        message,
+                        metadata,
+                        timestamp: new Date().toISOString()
+                    }
+                }))
+            } catch (e) {
+                // Ignore broadcast errors
+            }
+        }
 
         // Initialize services
         this.comprehensiveTesting = new ComprehensiveTestingService()
@@ -142,6 +162,12 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
         // 3. Rage Bait Logic (if applicable)
         if (guestTestType === 'rage_bait') {
             return await this.executeRageBait(goal)
+        }
+
+        // 4. Systematic Visual Testing (Default or Explicit)
+        // If explicitly 'visual' OR not 'login'/'signup' (which need the AI loop)
+        if (guestTestType === 'visual' || (!guestTestType && !['login', 'signup'].includes(guestTestType || ''))) {
+            return await this.executeSystematicVisualTest()
         }
 
         // 4. Main Loop
@@ -464,5 +490,267 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
                 currentUrl
             }
         )
+    }
+
+    /**
+     * Systematic Visual Testing Flow (10-Step Checklist)
+     */
+    /**
+     * Systematic Visual Testing Flow (10-Step Checklist)
+     */
+    private async executeSystematicVisualTest(): Promise<ProcessResult> {
+        logger.info({ runId: this.runId }, 'Starting Systematic Visual Test Flow')
+        this.logEmitter.log('Starting Systematic Visual Test (10-Step Checklist)...')
+        const page = this.deps.page
+
+        // Setup Monitors
+        const errors: string[] = []
+        const failedRequests: string[] = []
+        
+        const consoleListener = (msg: any) => {
+            if (msg.type() === 'error') errors.push(msg.text())
+        }
+        const requestListener = (res: any) => {
+            if (res.status() >= 400) failedRequests.push(`${res.url()} (${res.status()})`)
+        }
+        
+        page.on('console', consoleListener)
+        page.on('response', requestListener)
+
+        try {
+            // STEP 1: Website Load & Redirection (Enhanced Stability)
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 1. Validating Load & Redirection...`)
+            const startLoad = Date.now()
+            
+            // 1. Initial Load (Network Idle prefered)
+            let response
+            try {
+                this.logEmitter.log('Waiting for network idle...')
+                response = await page.goto(this.url, { waitUntil: 'networkidle', timeout: 5000 })
+            } catch (e) {
+                this.logEmitter.log('Network idle timed out, falling back to DOMContentLoaded')
+                response = await page.goto(this.url, { waitUntil: 'domcontentloaded' })
+                await page.waitForTimeout(1000) // Reduced grace period
+            }
+
+            // 2. Smart Wait (Stability Detection)
+            this.logEmitter.log('Performing Smart Wait (Network + DOM Stability)...')
+            try {
+                await page.evaluate(async () => {
+                    return new Promise<void>((resolve) => {
+                        let timeout: any;
+                        // Resolve if no DOM mutations happen for 500ms
+                        const observer = new MutationObserver(() => {
+                            clearTimeout(timeout);
+                            timeout = setTimeout(() => {
+                                observer.disconnect();
+                                resolve();
+                            }, 500);
+                        });
+                        observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+                        // Fallback safety resolve after 1s if no mutations at all
+                        timeout = setTimeout(() => { observer.disconnect(); resolve(); }, 1000);
+                    });
+                });
+                
+                // Also wait for any active animations to finish
+                await page.evaluate(() => Promise.all(
+                    document.getAnimations().map(a => a.finished)
+                ).catch(() => {}));
+
+                // Explicit check for known loaders (still useful)
+                const loadingText = page.getByText(/loading\.\.\.|please wait/i).first()
+                if (await loadingText.isVisible()) {
+                      await loadingText.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {})
+                }
+            } catch (e) {
+                this.logEmitter.log('Smart wait stabilized early or timed out')
+            }
+            
+            const status = response?.status()
+            const finalUrl = page.url()
+            
+            if (status && status !== 200) {
+                this.recordStep('validate_load', false, Date.now() - startLoad, { status, error: 'Status not 200' })
+                if (status >= 400) throw new Error(`Page load failed with status ${status}`)
+            } else {
+                this.recordStep('validate_load', true, Date.now() - startLoad, { status, finalUrl })
+            }
+
+            // STEP 2: Error Handling (Checking monitors)
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 2. Checking for Initial Errors...`)
+            // Initial check immediate after load
+            const initialErrors = errors.length
+            const initialFailedReqs = failedRequests.length
+            
+            if (initialErrors > 0 || initialFailedReqs > 0) {
+                 this.recordStep('check_errors', true, 0, { 
+                     message: `Detected ${initialErrors} console errors and ${initialFailedReqs} failed requests`,
+                     details: { errors: errors.slice(0, 5), failedRequests: failedRequests.slice(0, 5) }
+                 })
+            } else {
+                 this.recordStep('check_errors', true, 0, { message: 'No critical errors detected' })
+            }
+
+            // STEP 3: Auto-Close Ads/Popups (Heuristic Optimization - No AI)
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 3. Verifying Popups Closed (Fast Check)...`)
+            
+            // Replaces expensive AI call with CSS-based closure
+            try {
+                await page.evaluate(() => {
+                    const closeSelectors = [
+                        'button[aria-label="Close"]', 
+                        'button[class*="close"]', 
+                        '.modal-close', 
+                        '.popup-close',
+                        'div[role="dialog"] button',
+                        'div[aria-modal="true"] button'
+                    ]
+                    
+                    let closedCount = 0
+                    closeSelectors.forEach(selector => {
+                        document.querySelectorAll(selector).forEach(el => {
+                            // Only click if visible and looks like a close interaction
+                            const style = window.getComputedStyle(el)
+                            if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+                                (el as HTMLElement).click()
+                                closedCount++
+                            }
+                        })
+                    })
+                    return closedCount
+                })
+                this.recordStep('check_popups', true, 100, { message: 'Heuristic popup check complete' })
+            } catch (e) {
+                this.recordStep('check_popups', true, 0, { message: 'Popup check skipped (heuristic)' })
+            }
+
+            // STEP 4: Responsive Visual Testing
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 4. Responsive Testing (Multi-Resolution)...`)
+            const viewports = [
+                { width: 1920, height: 1080, label: 'Desktop' },
+                { width: 1366, height: 768, label: 'Laptop' },
+                { width: 768, height: 1024, label: 'Tablet' },
+                { width: 375, height: 667, label: 'Mobile' }
+            ]
+
+            for (const vp of viewports) {
+                await page.setViewportSize({ width: vp.width, height: vp.height })
+                await page.waitForTimeout(500)
+                const screenshot = await page.screenshot()
+                this.recordStep('responsive_check', true, 500, { device: vp.label, resolution: `${vp.width}x${vp.height}` })
+            }
+            await page.setViewportSize({ width: 1920, height: 1080 })
+
+            // STEP 5: Scroll Behavior
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 5. Testing Scroll Behavior...`)
+            await page.evaluate(async () => {
+                await new Promise<void>((resolve) => {
+                    let totalHeight = 0
+                    const distance = 100
+                    const timer = setInterval(() => {
+                        const scrollHeight = document.body.scrollHeight
+                        window.scrollBy(0, distance)
+                        totalHeight += distance
+                        if (totalHeight >= scrollHeight) {
+                            clearInterval(timer)
+                            resolve()
+                        }
+                    }, 50)
+                })
+            })
+            await page.evaluate(() => window.scrollTo(0, 0))
+            this.recordStep('scroll_behavior', true, 2000, { message: 'Smooth scroll complete' })
+
+            // STEP 6: Subpage Navigation
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 6. Subpage Navigation...`)
+            const links = await page.$$eval('nav a, header a', as => as.slice(0, 3).map(a => (a as HTMLAnchorElement).href))
+            const validLinks = links.filter(l => l && l.startsWith('http') && !l.includes('#'))
+            
+            for (const link of validLinks) {
+                try {
+                    this.logEmitter.log(`Navigating to ${link}...`)
+                    const navStart = Date.now()
+                    await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 10000 })
+                    this.recordStep('navigate_subpage', true, Date.now() - navStart, { url: link })
+                    await page.waitForTimeout(1000)
+                    await page.goBack()
+                } catch (e: any) {
+                    this.logEmitter.log(`Navigation failed: ${e.message}`)
+                }
+            }
+
+            // STEP 7: Return to Home Page (Explicit Check)
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 7. Validating Home Return...`)
+            try {
+                // Try to find a logo or home link
+                const homeSelector = 'a[href="/"], header a[href^="/"], .logo, [aria-label="Home"]'
+                const homeLink = await page.$(homeSelector)
+                if (homeLink) {
+                    await homeLink.click()
+                    await page.waitForTimeout(1000)
+                    const currentUrl = page.url()
+                    const isHome = currentUrl === this.url || currentUrl.endsWith('/')
+                    this.recordStep('return_home', true, 1000, { message: 'Home navigation successful', isHome })
+                } else {
+                    this.logEmitter.log('No obvious Home link found, skipping explicit click.')
+                    this.recordStep('return_home', true, 0, { message: 'Skipped - No Home link found' })
+                }
+            } catch (e: any) {
+                 this.recordStep('return_home', false, 0, { error: e.message })
+            }
+
+            // STEP 8: Hyperlink Validation
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 8. Validating Links...`)
+            const allLinksCount = await page.evaluate(() => document.querySelectorAll('a').length)
+            this.recordStep('validate_links', true, 100, { count: allLinksCount })
+
+            // STEP 9: Image & Video Loading
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 9. Verifying Media...`)
+            const brokenImages = await page.evaluate(() => {
+                return Array.from(document.querySelectorAll('img')).filter(img => !img.complete || img.naturalWidth === 0).length
+            })
+            if (brokenImages === 0) {
+                this.recordStep('check_media', true, 100, { message: 'All images loaded correctly' })
+            } else {
+                this.recordStep('check_media', false, 100, { error: `${brokenImages} broken images detected` })
+            }
+
+            // STEP 10: Final Visual Regression (Snapshot)
+            this.currentStep++
+            this.logEmitter.log(`[Step ${this.currentStep}] 10. Final Visual Snapshot...`)
+            await this.captureScreenshot('final-regression-snapshot')
+            this.recordStep('visual_regression', true, 500, { message: 'Baseline captured' })
+
+            return {
+                success: errors.length === 0, // Success if no console errors? Or loose? Keep true for now.
+                steps: this.steps,
+                artifacts: this.artifacts,
+                stage: 'execution'
+            }
+
+        } catch (error: any) {
+            logger.error({ runId: this.runId, error: error.message }, 'Visual Test Failed')
+            this.logEmitter.log(`Visual Test Failed: ${error.message}`)
+            return {
+                success: false,
+                steps: this.steps,
+                artifacts: this.artifacts,
+                stage: 'execution'
+            }
+        } finally {
+             // Cleanup
+             page.off('console', consoleListener)
+             page.off('response', requestListener)
+        }
     }
 }

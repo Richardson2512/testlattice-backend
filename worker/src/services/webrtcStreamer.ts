@@ -53,6 +53,7 @@ export class WebRTCStreamer extends EventEmitter {
       this.shouldQuitRedis = false
     } else {
       this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
+      this.redis.on('error', (err) => console.error('[WebRTC] Redis Client Error:', err))
       this.shouldQuitRedis = true
     }
   }
