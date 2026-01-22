@@ -1,16 +1,18 @@
 // IMPORTANT: Load environment variables FIRST, before any other imports
 // Use require for dotenv to ensure it loads synchronously before any ES6 imports
 // This MUST execute before any ES6 imports that might use environment variables
-const dotenv = require('dotenv')
 const path = require('path')
 
-// Load .env file from api directory
-// When running with `npm run dev` from api/, process.cwd() is api/
-const envPath = path.resolve(process.cwd(), '.env')
-const result = dotenv.config({ path: envPath })
+// Only load dotenv in development - production uses real env vars from Railway/container
+if (process.env.NODE_ENV !== 'production') {
+  const dotenv = require('dotenv')
 
-// Log for debugging
-if (process.env.NODE_ENV === 'development') {
+  // Load .env file from api directory
+  // When running with `npm run dev` from api/, process.cwd() is api/
+  const envPath = path.resolve(process.cwd(), '.env')
+  const result = dotenv.config({ path: envPath })
+
+  // Log for debugging in development
   console.log('Loading .env from:', envPath)
   if (result.error) {
     console.error('❌ Error loading .env:', result.error.message)
