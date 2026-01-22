@@ -1,0 +1,11 @@
+# Railway configuration - force use of Dockerfile
+# Required because Railway may auto-detect Nixpacks otherwise
+
+[build]
+# Explicitly use the Dockerfile in this directory
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node dist/index.js"
+healthcheckPath = "/health"
