@@ -1,7 +1,7 @@
 # Worker service Dockerfile
-# Uses Node 18 on Debian Bullseye for Playwright compatibility
+# Uses Node 20 on Debian Bookworm for Playwright compatibility
 
-FROM node:18-bullseye
+FROM node:20-bookworm
 
 WORKDIR /app
 
@@ -11,8 +11,9 @@ COPY package*.json ./
 # Install npm dependencies
 RUN npm ci
 
-# Install Playwright chromium with system dependencies
+# Install Playwright browsers with system dependencies
 # This MUST happen at build time to avoid cold-start failures
+# Using --with-deps installs all required OS-level libraries (libgbm, etc.)
 RUN npx playwright install --with-deps chromium
 
 # Copy source code
@@ -29,5 +30,5 @@ USER worker
 # Set environment
 ENV NODE_ENV=production
 
-# Start the worker
+# Start the worker directly (bypass npm to avoid dotenv auto-injection)
 CMD ["node", "dist/index.js"]
