@@ -1,11 +1,11 @@
-# Railway configuration - force use of Dockerfile
-# Required because Railway may auto-detect Nixpacks otherwise
+# Railway configuration for the Worker service
+# Forces use of Dockerfile builder for Playwright browser installation
 
 [build]
-# Explicitly use the Dockerfile in this directory
-builder = "dockerfile"
+# DOCKERFILE (uppercase) is required - tells Railway to use Docker instead of Railpack
+builder = "DOCKERFILE"
+# Path relative to the service's root directory (worker/)
 dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "node dist/index.js"
-healthcheckPath = "/health"
