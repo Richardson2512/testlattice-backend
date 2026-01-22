@@ -5,30 +5,45 @@ FROM node:20-bookworm
 
 WORKDIR /app
 
+# Create non-root user FIRST (before installing Playwright)
+# This ensures Playwright browsers are installed in /home/worker/.cache/ms-playwright/
+RUN groupadd -r worker && useradd -r -g worker -m worker
+
 # Copy package files first for better layer caching
 COPY package*.json ./
 
-# Install npm dependencies
+# Install npm dependencies as root (for global access)
 RUN npm ci
 
-# Install Playwright browsers with system dependencies
-# This MUST happen at build time to avoid cold-start failures
-# Using --with-deps installs all required OS-level libraries (libgbm, etc.)
-RUN npx playwright install --with-deps chromium
+# Change ownership of app directory to worker
+RUN chown -R worker:worker /app
 
-# Copy source code
+# Switch to worker user BEFORE installing Playwright
+# This ensures browsers are installed in /home/worker/.cache/ms-playwright/
+USER worker
+
+# Install Playwright browsers with system dependencies
+# Must run as worker user so browsers go to correct cache location
+# Note: --with-deps requires root, so we install deps separately first
+USER root
+RUN npx playwright install-deps chromium
+USER worker
+RUN npx playwright install chromium
+
+# Copy source code (as worker)
+USER root
 COPY . .
+RUN chown -R worker:worker /app
+USER worker
 
 # Build TypeScript
 RUN npm run build
 
-# Create non-root user for security
-RUN groupadd -r worker && useradd -r -g worker worker
-RUN chown -R worker:worker /app
-USER worker
-
 # Set environment
 ENV NODE_ENV=production
+
+# Verify Playwright installation path (debug - can be removed later)
+RUN ls -la /home/worker/.cache/ms-playwright/ || echo "Warning: Playwright cache not found"
 
 # Start the worker directly (bypass npm to avoid dotenv auto-injection)
 CMD ["node", "dist/index.js"]
