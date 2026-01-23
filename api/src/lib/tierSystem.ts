@@ -328,33 +328,38 @@ export async function getUserTier(userId?: string): Promise<UserTier> {
     }
 
     // Map database tier to UserTier
+    // INVARIANT: Free users behave like guests with persistence and limits
     const tierMap: Record<string, UserTier> = {
-      'free': 'guest', // Free tier maps to guest limits
+      'free': 'free', // Keep free as distinct tier for usage tracking
       'starter': 'starter',
       'indie': 'indie',
       'pro': 'pro',
+      'agency': 'agency',
     }
 
-    return tierMap[data.tier] || 'guest'
+    return tierMap[data.tier] || 'free'
   } catch (err) {
     console.error('Error fetching user tier:', err)
-    return 'guest'
+    return 'free'
   }
 }
 
 /**
  * Apply tier restrictions to test options
+ * INVARIANT: Free users behave like guests with persistence and limits
  */
 export function applyTierRestrictions(
   tier: UserTier,
   options: any
 ): any {
-  const limits = TIER_LIMITS[tier]
+  // Free tier uses guest limits for feature restrictions
+  const effectiveTier = tier === 'free' ? 'guest' : tier
+  const limits = TIER_LIMITS[effectiveTier]
 
   return {
     ...options,
     // Enforce max steps only if tier has a finite limit
-    // Guest: 25 steps max
+    // Guest/Free: 25 steps max
     // Starter+: Unlimited (dynamic based on diagnosis)
     maxSteps: limits.maxSteps === Infinity
       ? options.maxSteps  // Keep user's requested steps (will be dynamic based on diagnosis)
@@ -370,5 +375,73 @@ export function applyTierRestrictions(
     // Enforce visual regression
     visualDiff: limits.comprehensiveTesting.visualRegression && options.visualDiff,
   }
+}
+
+/**
+ * Check monthly usage limits for free tier users
+ * Rule 1: Free users are limited to 3 tests per month
+ */
+export async function checkUsageLimits(userId: string, tier: UserTier): Promise<{
+  canRun: boolean
+  testsUsed: number
+  testsLimit: number
+  reason?: string
+}> {
+  // Paid tiers have no monthly limit
+  if (tier !== 'free') {
+    return { canRun: true, testsUsed: 0, testsLimit: Infinity }
+  }
+
+  try {
+    const { supabase } = await import('./supabase')
+
+    const { data, error } = await supabase
+      .from('user_subscriptions')
+      .select('tests_used_this_month')
+      .eq('user_id', userId)
+      .single()
+
+    if (error) {
+      console.warn(`Failed to check usage for user ${userId}:`, error.message)
+      // On error, allow the test (fail open for UX, backend will still track)
+      return { canRun: true, testsUsed: 0, testsLimit: 3 }
+    }
+
+    const used = data?.tests_used_this_month || 0
+    const limit = 3
+
+    return {
+      canRun: used < limit,
+      testsUsed: used,
+      testsLimit: limit,
+      reason: used >= limit ? `Monthly limit reached (${used}/${limit} tests)` : undefined
+    }
+  } catch (err) {
+    console.error('Error checking usage limits:', err)
+    // Fail open for UX
+    return { canRun: true, testsUsed: 0, testsLimit: 3 }
+  }
+}
+
+/**
+ * Validate test type cardinality for free tier
+ * Rule 2: Free users can only run 1 test type per run
+ */
+export function validateTestTypeCardinality(
+  tier: UserTier,
+  selectedTestTypes?: string[]
+): { valid: boolean; error?: string } {
+  if (tier !== 'free') {
+    return { valid: true }
+  }
+
+  if (selectedTestTypes && selectedTestTypes.length > 1) {
+    return {
+      valid: false,
+      error: 'Free plan allows 1 test type per run. Upgrade to select multiple.'
+    }
+  }
+
+  return { valid: true }
 }
 
