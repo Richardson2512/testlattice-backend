@@ -8,7 +8,10 @@ import {
   getSubscription,
   getTierFromProductId,
   isAddOnProduct,
+
+
   getAddOnVisualTests,
+  getAddOnBehaviorCredits,
   POLAR_PRODUCTS,
 } from '../services/polar'
 
@@ -67,8 +70,6 @@ export async function billingRoutes(fastify: FastifyInstance) {
       return reply.code(500).send({ error: error.message || 'Failed to get subscription' })
     }
   })
-
-
 
   // Create Polar checkout session
   fastify.post('/checkout', async (request, reply) => {
@@ -136,9 +137,6 @@ export async function billingRoutes(fastify: FastifyInstance) {
         case 'checkout.updated':
           fastify.log.info(`Checkout event: ${payload.data.id}`)
           break
-
-        case 'subscription.created':
-        case 'subscription.updated': {
           const subscription = payload.data
           const productId = subscription.product_id
           const customerId = subscription.customer_id
@@ -148,7 +146,9 @@ export async function billingRoutes(fastify: FastifyInstance) {
             subscription.status === 'past_due' ? 'past_due' :
               subscription.status === 'canceled' ? 'cancelled' : 'active'
 
-          fastify.log.info(`Subscription ${payload.type}: ${subscriptionId}, tier: ${tier}`)
+          const isAddOn = isAddOnProduct(productId)
+
+          fastify.log.info(`Subscription ${payload.type}: ${subscriptionId}, tier: ${tier}, isAddOn: ${isAddOn}`)
 
           // Find user by Polar customer ID or email
           // First, try to find by polar_customer_id
@@ -160,21 +160,40 @@ export async function billingRoutes(fastify: FastifyInstance) {
 
           if (existingSub) {
             // Update existing subscription
+            const updatePayload: any = {
+              polar_subscription_id: subscriptionId,
+              polar_product_id: productId,
+              status,
+              current_period_start: subscription.current_period_start,
+              current_period_end: subscription.current_period_end,
+              cancel_at_period_end: subscription.cancel_at_period_end || false,
+              updated_at: new Date().toISOString(),
+            }
+
+            // Only update tier if it's NOT an add-on
+            if (!isAddOn) {
+              updatePayload.tier = tier
+            }
+
+            // Update add-on specific fields
+            if (isAddOn) {
+              const visualTests = getAddOnVisualTests(productId)
+              if (visualTests > 0) {
+                updatePayload.addon_visual_tests = visualTests
+              }
+
+              const behaviorCredits = getAddOnBehaviorCredits(productId)
+              if (behaviorCredits > 0) {
+                // Note: This replaces credits. Ideally, we might want to add, 
+                // but for a subscription model, "refreshing" to the plan amount is standard.
+                // If these are one-time purchases, we'd handle checkout.created instead.
+                updatePayload.behavior_credits = behaviorCredits
+              }
+            }
+
             await supabase
               .from('user_subscriptions')
-              .update({
-                tier: isAddOnProduct(productId) ? undefined : tier, // Don't change tier for add-ons
-                polar_subscription_id: subscriptionId,
-                polar_product_id: productId,
-                status,
-                current_period_start: subscription.current_period_start,
-                current_period_end: subscription.current_period_end,
-                cancel_at_period_end: subscription.cancel_at_period_end || false,
-                addon_visual_tests: isAddOnProduct(productId)
-                  ? getAddOnVisualTests(productId)
-                  : undefined,
-                updated_at: new Date().toISOString(),
-              })
+              .update(updatePayload)
               .eq('polar_customer_id', customerId)
           } else {
             // Try to match by email via checkout metadata
@@ -182,236 +201,217 @@ export async function billingRoutes(fastify: FastifyInstance) {
             const userId = metadata.userId
 
             if (userId) {
+              const upsertPayload: any = {
+                user_id: userId,
+                tier: isAddOn ? 'free' : tier, // Default to free if first sub is addon (unlikely but safe)
+                polar_customer_id: customerId,
+                polar_subscription_id: subscriptionId,
+                polar_product_id: productId,
+                status,
+                current_period_start: subscription.current_period_start,
+                current_period_end: subscription.current_period_end,
+                cancel_at_period_end: subscription.cancel_at_period_end || false,
+                updated_at: new Date().toISOString(),
+              }
+
+              if (isAddOn) {
+                upsertPayload.addon_visual_tests = getAddOnVisualTests(productId)
+                upsertPayload.behavior_credits = getAddOnBehaviorCredits(productId)
+              } else {
+                upsertPayload.addon_visual_tests = 0
+                upsertPayload.behavior_credits = 0
+              }
+
               await supabase
                 .from('user_subscriptions')
-                .upsert({
-                  user_id: userId,
-                  tier: isAddOnProduct(productId) ? 'free' : tier,
-                  polar_customer_id: customerId,
-                  polar_subscription_id: subscriptionId,
-                  polar_product_id: productId,
-                  status,
-                  current_period_start: subscription.current_period_start,
-                  current_period_end: subscription.current_period_end,
-                  cancel_at_period_end: subscription.cancel_at_period_end || false,
-                  addon_visual_tests: isAddOnProduct(productId) ? getAddOnVisualTests(productId) : 0,
-                  updated_at: new Date().toISOString(),
-                }, { onConflict: 'user_id' })
+                .upsert(upsertPayload, { onConflict: 'user_id' })
             }
           }
           break
-        }
+      }
 
         case 'subscription.canceled': {
-          const subscription = payload.data
-          const customerId = subscription.customer_id
+        const subscription = payload.data
+        const customerId = subscription.customer_id
 
-          fastify.log.info(`Subscription canceled: ${subscription.id}`)
+        fastify.log.info(`Subscription canceled: ${subscription.id}`)
 
-          await supabase
-            .from('user_subscriptions')
-            .update({
-              status: 'cancelled',
-              cancel_at_period_end: true,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('polar_customer_id', customerId)
-          break
-        }
+        await supabase
+          .from('user_subscriptions')
+          .update({
+            status: 'cancelled',
+            cancel_at_period_end: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('polar_customer_id', customerId)
+        break
+      }
 
         case 'subscription.revoked': {
-          const subscription = payload.data
-          const customerId = subscription.customer_id
+        const subscription = payload.data
+        const customerId = subscription.customer_id
 
-          fastify.log.info(`Subscription revoked: ${subscription.id}`)
+        fastify.log.info(`Subscription revoked: ${subscription.id}`)
 
-          // Downgrade to free tier
+        // Downgrade to free tier
+        await supabase
+          .from('user_subscriptions')
+          .update({
+            tier: 'free',
+            status: 'expired',
+            polar_subscription_id: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('polar_customer_id', customerId)
+        break
+      }
+
+        default:
+      fastify.log.info(`Unhandled Polar webhook: ${payload.type}`)
+    }
+
+return reply.send({ received: true })
+  } catch (error: any) {
+    fastify.log.error('Webhook error:', error)
+    return reply.code(500).send({ error: error.message || 'Webhook processing failed' })
+  }
+})
+
+// Get available products/pricing
+fastify.get('/products', async (request, reply) => {
+  return reply.send({
+    products: {
+      starter: POLAR_PRODUCTS.starter,
+      indie: POLAR_PRODUCTS.indie,
+      pro: POLAR_PRODUCTS.pro,
+      addon50: POLAR_PRODUCTS.addon50,
+      addon200: POLAR_PRODUCTS.addon200,
+    },
+  })
+})
+
+// Cancel subscription
+fastify.post('/cancel', async (request, reply) => {
+  try {
+    const userId = (request as any).userId
+
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+
+    const supabase = await getSupabaseClient()
+
+    // Mark as canceling at period end (don't immediately revoke)
+    const { error } = await supabase
+      .from('user_subscriptions')
+      .update({
+        cancel_at_period_end: true,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+
+    if (error) throw error
+
+    // Note: Actual cancellation should be done via Polar API
+    // The webhook will handle the final status update
+
+    return reply.send({ success: true, message: 'Subscription will be cancelled at period end' })
+  } catch (error: any) {
+    fastify.log.error(error)
+    return reply.code(500).send({ error: error.message || 'Failed to cancel subscription' })
+  }
+})
+
+// Reconcile subscription with Polar (self-healing for webhook failures)
+fastify.post('/reconcile', async (request, reply) => {
+  try {
+    const userId = (request as any).userId
+
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+
+    const supabase = await getSupabaseClient()
+
+    // Get current DB subscription
+    const { data: subscription, error } = await supabase
+      .from('user_subscriptions')
+      .select('*')
+      .eq('user_id', userId)
+      .single()
+
+    if (error && error.code !== 'PGRST116') throw error
+
+    // If no Polar customer ID, they haven't paid - nothing to reconcile
+    if (!subscription?.polar_customer_id) {
+      return reply.send({ synced: true, tier: 'free', message: 'No Polar subscription found' })
+    }
+
+    // Fetch active subscriptions from Polar
+    try {
+      const polarSubscription = await getSubscription(subscription.polar_subscription_id)
+
+      if (polarSubscription && polarSubscription.status === 'active') {
+        // Get tier from product
+        const productId = (polarSubscription as any).product?.id || (polarSubscription as any).productId
+        const tier = getTierFromProductId(productId)
+
+        // Update if different
+        if (subscription.tier !== tier) {
           await supabase
             .from('user_subscriptions')
             .update({
-              tier: 'free',
-              status: 'expired',
-              polar_subscription_id: null,
-              updated_at: new Date().toISOString(),
+              tier,
+              status: 'active',
+              updated_at: new Date().toISOString()
             })
-            .eq('polar_customer_id', customerId)
-          break
-        }
-
-        default:
-          fastify.log.info(`Unhandled Polar webhook: ${payload.type}`)
-      }
-
-      return reply.send({ received: true })
-    } catch (error: any) {
-      fastify.log.error('Webhook error:', error)
-      return reply.code(500).send({ error: error.message || 'Webhook processing failed' })
-    }
-  })
-
-  // Get available products/pricing
-  fastify.get('/products', async (request, reply) => {
-    return reply.send({
-      products: {
-        starter: POLAR_PRODUCTS.starter,
-        indie: POLAR_PRODUCTS.indie,
-        pro: POLAR_PRODUCTS.pro,
-        addon50: POLAR_PRODUCTS.addon50,
-        addon200: POLAR_PRODUCTS.addon200,
-      },
-    })
-  })
-
-  // Cancel subscription
-  fastify.post('/cancel', async (request, reply) => {
-    try {
-      const userId = (request as any).userId
-
-      if (!userId) {
-        return reply.code(401).send({ error: 'Unauthorized' })
-      }
-
-      const supabase = await getSupabaseClient()
-
-      // Mark as canceling at period end (don't immediately revoke)
-      const { error } = await supabase
-        .from('user_subscriptions')
-        .update({
-          cancel_at_period_end: true,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', userId)
-
-      if (error) throw error
-
-      // Note: Actual cancellation should be done via Polar API
-      // The webhook will handle the final status update
-
-      return reply.send({ success: true, message: 'Subscription will be cancelled at period end' })
-    } catch (error: any) {
-      fastify.log.error(error)
-      return reply.code(500).send({ error: error.message || 'Failed to cancel subscription' })
-    }
-  })
-
-  // Reconcile subscription with Polar (self-healing for webhook failures)
-  fastify.post('/reconcile', async (request, reply) => {
-    try {
-      const userId = (request as any).userId
-
-      if (!userId) {
-        return reply.code(401).send({ error: 'Unauthorized' })
-      }
-
-      const supabase = await getSupabaseClient()
-
-      // Get current DB subscription
-      const { data: subscription, error } = await supabase
-        .from('user_subscriptions')
-        .select('*')
-        .eq('user_id', userId)
-        .single()
-
-      if (error && error.code !== 'PGRST116') throw error
-
-      // If no Polar customer ID, they haven't paid - nothing to reconcile
-      if (!subscription?.polar_customer_id) {
-        return reply.send({ synced: true, tier: 'free', message: 'No Polar subscription found' })
-      }
-
-      // Fetch active subscriptions from Polar
-      try {
-        const polarSubscription = await getSubscription(subscription.polar_subscription_id)
-
-        if (polarSubscription && polarSubscription.status === 'active') {
-          // Get tier from product
-          const productId = (polarSubscription as any).product?.id || (polarSubscription as any).productId
-          const tier = getTierFromProductId(productId)
-
-          // Update if different
-          if (subscription.tier !== tier) {
-            await supabase
-              .from('user_subscriptions')
-              .update({
-                tier,
-                status: 'active',
-                updated_at: new Date().toISOString()
-              })
-              .eq('user_id', userId)
-
-            fastify.log.info(`Reconciled user ${userId}: ${subscription.tier} -> ${tier}`)
-            return reply.send({ synced: true, updated: true, previousTier: subscription.tier, tier })
-          }
-        } else if (polarSubscription?.status === 'canceled') {
-          // Subscription was canceled - revert to free
-          if (subscription.tier !== 'free') {
-            await supabase
-              .from('user_subscriptions')
-              .update({ tier: 'free', status: 'cancelled', updated_at: new Date().toISOString() })
-              .eq('user_id', userId)
-
-            return reply.send({ synced: true, updated: true, previousTier: subscription.tier, tier: 'free' })
-          }
-        }
-      } catch (polarError: any) {
-        fastify.log.warn(`Polar API error during reconciliation: ${polarError.message}`)
-        // Don't fail - just return current status
-      }
-
-      return reply.send({ synced: true, tier: subscription.tier })
-    } catch (error: any) {
-      fastify.log.error('Reconciliation error:', error)
-      return reply.code(500).send({ error: 'Reconciliation failed' })
-    }
-  })
-
-  // Check usage limits (called before starting a test)
-  fastify.get('/usage', async (request, reply) => {
-    try {
-      const userId = (request as any).userId
-
-      if (!userId) {
-        return reply.code(401).send({ error: 'Unauthorized' })
-      }
-
-      const supabase = await getSupabaseClient()
-
-      // Try the RPC function first, fallback to direct query if not deployed yet
-      let result = { can_run: true, tests_used: 0, tests_limit: 3, tier: 'free' }
-
-      try {
-        const { data, error } = await supabase.rpc('check_usage_limit', { p_user_id: userId })
-        if (!error && data?.[0]) {
-          result = data[0]
-        } else {
-          // Fallback: direct query
-          const { data: subscription } = await supabase
-            .from('user_subscriptions')
-            .select('tier, tests_used_this_month')
             .eq('user_id', userId)
-            .single()
 
-          const tier = subscription?.tier || 'free'
-          const testsUsed = subscription?.tests_used_this_month || 0
-
-          // Set limits based on tier
-          const limitMap: Record<string, number> = {
-            free: 3,
-            starter: 100,
-            indie: 300,
-            pro: 750,
-          }
-          const testsLimit = limitMap[tier] || 3
-
-          result = {
-            can_run: testsUsed < testsLimit,
-            tests_used: testsUsed,
-            tests_limit: testsLimit,
-            tier,
-          }
+          fastify.log.info(`Reconciled user ${userId}: ${subscription.tier} -> ${tier}`)
+          return reply.send({ synced: true, updated: true, previousTier: subscription.tier, tier })
         }
-      } catch (rpcError) {
-        fastify.log.warn('RPC check_usage_limit not available, using fallback')
+      } else if (polarSubscription?.status === 'canceled') {
+        // Subscription was canceled - revert to free
+        if (subscription.tier !== 'free') {
+          await supabase
+            .from('user_subscriptions')
+            .update({ tier: 'free', status: 'cancelled', updated_at: new Date().toISOString() })
+            .eq('user_id', userId)
+
+          return reply.send({ synced: true, updated: true, previousTier: subscription.tier, tier: 'free' })
+        }
+      }
+    } catch (polarError: any) {
+      fastify.log.warn(`Polar API error during reconciliation: ${polarError.message}`)
+      // Don't fail - just return current status
+    }
+
+    return reply.send({ synced: true, tier: subscription.tier })
+  } catch (error: any) {
+    fastify.log.error('Reconciliation error:', error)
+    return reply.code(500).send({ error: 'Reconciliation failed' })
+  }
+})
+
+// Check usage limits (called before starting a test)
+fastify.get('/usage', async (request, reply) => {
+  try {
+    const userId = (request as any).userId
+
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+
+    const supabase = await getSupabaseClient()
+
+    // Try the RPC function first, fallback to direct query if not deployed yet
+    let result = { can_run: true, tests_used: 0, tests_limit: 3, tier: 'free' }
+
+    try {
+      const { data, error } = await supabase.rpc('check_usage_limit', { p_user_id: userId })
+      if (!error && data?.[0]) {
+        result = data[0]
+      } else {
         // Fallback: direct query
         const { data: subscription } = await supabase
           .from('user_subscriptions')
@@ -422,6 +422,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
         const tier = subscription?.tier || 'free'
         const testsUsed = subscription?.tests_used_this_month || 0
 
+        // Set limits based on tier
         const limitMap: Record<string, number> = {
           free: 3,
           starter: 100,
@@ -437,48 +438,75 @@ export async function billingRoutes(fastify: FastifyInstance) {
           tier,
         }
       }
+    } catch (rpcError) {
+      fastify.log.warn('RPC check_usage_limit not available, using fallback')
+      // Fallback: direct query
+      const { data: subscription } = await supabase
+        .from('user_subscriptions')
+        .select('tier, tests_used_this_month')
+        .eq('user_id', userId)
+        .single()
 
-      return reply.send({
-        canRun: result.can_run,
-        testsUsed: result.tests_used,
-        testsLimit: result.tests_limit,
-        testsRemaining: Math.max(0, result.tests_limit - result.tests_used),
-        tier: result.tier,
-      })
-    } catch (error: any) {
-      fastify.log.error(error)
-      return reply.code(500).send({ error: error.message || 'Failed to check usage' })
-    }
-  })
+      const tier = subscription?.tier || 'free'
+      const testsUsed = subscription?.tests_used_this_month || 0
 
-  // Increment usage (called when a test starts)
-  fastify.post('/usage/increment', async (request, reply) => {
-    try {
-      const userId = (request as any).userId
-      const { type = 'test' } = request.body as { type?: 'test' | 'visual' }
-
-      if (!userId) {
-        return reply.code(401).send({ error: 'Unauthorized' })
+      const limitMap: Record<string, number> = {
+        free: 3,
+        starter: 100,
+        indie: 300,
+        pro: 750,
       }
+      const testsLimit = limitMap[tier] || 3
 
-      const supabase = await getSupabaseClient()
-
-      // Use atomic increment
-      const rpcName = type === 'visual' ? 'increment_visual_test_usage' : 'increment_test_usage'
-      const { data, error } = await supabase.rpc(rpcName, { p_user_id: userId })
-
-      if (error) throw error
-
-      const result = data?.[0] || { new_count: 0, tier: 'free' }
-
-      return reply.send({
-        success: true,
-        newCount: result.new_count,
-        tier: result.tier,
-      })
-    } catch (error: any) {
-      fastify.log.error(error)
-      return reply.code(500).send({ error: error.message || 'Failed to increment usage' })
+      result = {
+        can_run: testsUsed < testsLimit,
+        tests_used: testsUsed,
+        tests_limit: testsLimit,
+        tier,
+      }
     }
-  })
+
+    return reply.send({
+      canRun: result.can_run,
+      testsUsed: result.tests_used,
+      testsLimit: result.tests_limit,
+      testsRemaining: Math.max(0, result.tests_limit - result.tests_used),
+      tier: result.tier,
+    })
+  } catch (error: any) {
+    fastify.log.error(error)
+    return reply.code(500).send({ error: error.message || 'Failed to check usage' })
+  }
+})
+
+// Increment usage (called when a test starts)
+fastify.post('/usage/increment', async (request, reply) => {
+  try {
+    const userId = (request as any).userId
+    const { type = 'test' } = request.body as { type?: 'test' | 'visual' }
+
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+
+    const supabase = await getSupabaseClient()
+
+    // Use atomic increment
+    const rpcName = type === 'visual' ? 'increment_visual_test_usage' : 'increment_test_usage'
+    const { data, error } = await supabase.rpc(rpcName, { p_user_id: userId })
+
+    if (error) throw error
+
+    const result = data?.[0] || { new_count: 0, tier: 'free' }
+
+    return reply.send({
+      success: true,
+      newCount: result.new_count,
+      tier: result.tier,
+    })
+  } catch (error: any) {
+    fastify.log.error(error)
+    return reply.code(500).send({ error: error.message || 'Failed to increment usage' })
+  }
+})
 }

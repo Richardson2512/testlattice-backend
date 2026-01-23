@@ -10,8 +10,11 @@ export const POLAR_PRODUCTS = {
     starter: '84331781-6628-4f25-a1c4-81c9aff5c301',
     indie: 'a9519689-9ac5-4b9e-b006-ad35b2d68531',
     pro: '1db05405-2505-4156-a535-f4318daabc8c',
+
     addon50: '8aeed243-c488-434f-8952-3242a3da8757',
     addon200: 'f9901198-4809-4551-adad-1da001fa41da',
+    behavior: 'fd537924-bd3a-43e1-8668-4bd8334fa60b',
+    addonVisual: '35155a1e-a031-4be4-bddc-69a8e1d144bc',
 } as const
 
 // Map product IDs to tier names
@@ -97,7 +100,10 @@ export function getTierFromProductId(productId: string): string {
  * Check if product is an add-on
  */
 export function isAddOnProduct(productId: string): boolean {
-    return productId === POLAR_PRODUCTS.addon50 || productId === POLAR_PRODUCTS.addon200
+    return productId === POLAR_PRODUCTS.addon50 ||
+        productId === POLAR_PRODUCTS.addon200 ||
+        productId === POLAR_PRODUCTS.behavior ||
+        productId === POLAR_PRODUCTS.addonVisual
 }
 
 /**
@@ -106,5 +112,14 @@ export function isAddOnProduct(productId: string): boolean {
 export function getAddOnVisualTests(productId: string): number {
     if (productId === POLAR_PRODUCTS.addon50) return 50
     if (productId === POLAR_PRODUCTS.addon200) return 200
+    if (productId === POLAR_PRODUCTS.addonVisual) return 100 // Assuming 100 for this new one, adjust as needed
+    return 0
+}
+
+/**
+ * Get behavior credits from add-on product
+ */
+export function getAddOnBehaviorCredits(productId: string): number {
+    if (productId === POLAR_PRODUCTS.behavior) return 20 // $20 for 20 credits
     return 0
 }
