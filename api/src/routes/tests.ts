@@ -20,15 +20,70 @@ export async function testRoutes(fastify: FastifyInstance) {
     )
   }
   // Create a new test run (requires authentication)
+  // INVARIANT: Free users behave like guests with persistence and limits; paid users unlock composition and control.
   fastify.post<{ Body: CreateTestRunRequest }>('/run', {
     preHandler: authenticate,
   }, async (request: AuthenticatedRequest, reply: any) => {
     try {
+      // TIER ENFORCEMENT: Check tier FIRST, before any other logic
+      const {
+        getUserTier,
+        validateTierLimits,
+        applyTierRestrictions,
+        checkUsageLimits,
+        validateTestTypeCardinality,
+        TIER_LIMITS
+      } = await import('../lib/tierSystem')
+
+      const userTier = await getUserTier(request.user?.id)
+
+      // Rule 1: Check monthly usage for free users
+      if (userTier === 'free') {
+        const usage = await checkUsageLimits(request.user!.id, userTier)
+        if (!usage.canRun) {
+          return reply.code(403).send({
+            error: 'Monthly limit reached',
+            message: `Free plan: ${usage.testsUsed}/${usage.testsLimit} tests used this month.`,
+            tier: 'free',
+            upgradeUrl: '/pricing'
+          })
+        }
+      }
+
       const { projectId, build, profile, options } = request.body as CreateTestRunRequest
 
-      const normalizedOptions = {
+      // Rule 2: Enforce single test type for free users
+      const cardinalityCheck = validateTestTypeCardinality(userTier, options?.selectedTestTypes)
+      if (!cardinalityCheck.valid) {
+        return reply.code(403).send({
+          error: 'Test type restriction',
+          message: cardinalityCheck.error,
+          tier: userTier,
+          upgradeUrl: '/pricing'
+        })
+      }
+
+      // Rule 3: Validate tier limits (cross-browser, God Mode, etc.)
+      const tierLimits = TIER_LIMITS[userTier === 'free' ? 'guest' : userTier]
+      const validation = validateTierLimits(userTier === 'free' ? 'guest' : userTier, options || {}, profile)
+      if (!validation.valid) {
+        return reply.code(403).send({
+          error: 'Tier limit exceeded',
+          message: validation.errors.join('; '),
+          tier: userTier,
+          limits: tierLimits
+        })
+      }
+
+      // Apply tier restrictions to options
+      const restrictedOptions = applyTierRestrictions(userTier, {
         ...(options || {}),
         approvalPolicy: options?.approvalPolicy ?? { mode: 'manual' as const },
+      })
+
+      const normalizedOptions = {
+        ...restrictedOptions,
+        userTier, // Pass tier to worker for downstream enforcement
       }
 
       // Reject mobile test requests (Appium is disabled)
@@ -85,6 +140,19 @@ export async function testRoutes(fastify: FastifyInstance) {
         })
 
         fastify.log.info(`Test run ${testRun.id} enqueued successfully`)
+
+        // Enforce Usage Limits: Increment usage immediately after successful enqueue
+        // This ensures the backend tracks usage regardless of frontend actions
+        try {
+          const supabase = getSupabaseClient()
+          const isVisual = normalizedOptions.visualDiff === true
+          const rpcName = isVisual ? 'increment_visual_test_usage' : 'increment_test_usage'
+
+          await supabase.rpc(rpcName, { p_user_id: request.user!.id })
+        } catch (usageError) {
+          // Log but don't fail the request (fail open to avoid blocking users during transient DB issues)
+          fastify.log.warn({ err: usageError }, `Failed to increment usage for test ${testRun.id}`)
+        }
       } catch (queueError: any) {
         fastify.log.error(`Failed to enqueue test run ${testRun.id}:`, queueError)
         // Update status to failed if queue is unavailable
@@ -400,10 +468,12 @@ export async function testRoutes(fastify: FastifyInstance) {
     }
   })
 
-  // Resume test run (no auth required - viewing test implies access)
-  fastify.post<{ Params: { runId: string } }>('/:runId/resume', async (request: any, reply: any) => {
+  // Resume test run (optionalAuth - registered tests require auth, guest tests don't)
+  fastify.post<{ Params: { runId: string } }>('/:runId/resume', {
+    preHandler: optionalAuth,
+  }, async (request: AuthenticatedRequest, reply: any) => {
     try {
-      const { runId } = request.params
+      const { runId } = request.params as { runId: string }
 
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
@@ -442,10 +512,12 @@ export async function testRoutes(fastify: FastifyInstance) {
     }
   })
 
-  // Approve test run (Explicit endpoint for approval)
-  fastify.post<{ Params: { runId: string } }>('/:runId/approve', async (request: any, reply: any) => {
+  // Approve test run (optionalAuth - registered tests require auth, guest tests don't)
+  fastify.post<{ Params: { runId: string } }>('/:runId/approve', {
+    preHandler: optionalAuth,
+  }, async (request: AuthenticatedRequest, reply: any) => {
     try {
-      const { runId } = request.params
+      const { runId } = request.params as { runId: string }
 
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
