@@ -223,6 +223,42 @@ export class Database {
     return (data || []).map(this.mapProjectFromDb)
   }
 
+  static async updateProject(id: string, updates: Partial<Project>): Promise<Project | null> {
+    const updateData: any = {
+      updated_at: new Date().toISOString(),
+    }
+
+    if (updates.name !== undefined) updateData.name = updates.name
+    if (updates.description !== undefined) updateData.description = updates.description
+
+    const { data, error } = await supabase
+      .from('projects')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      throw new Error(`Failed to update project: ${error.message}`)
+    }
+
+    return data ? this.mapProjectFromDb(data) : null
+  }
+
+  static async deleteProject(id: string): Promise<boolean> {
+    // Note: This relies on cascade delete in the database for test runs
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      throw new Error(`Failed to delete project: ${error.message}`)
+    }
+
+    return true
+  }
+
   // Artifacts
   static async createArtifact(data: Omit<TestArtifact, 'id' | 'createdAt'>): Promise<TestArtifact> {
     const now = new Date().toISOString()

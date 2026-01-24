@@ -395,6 +395,20 @@ export async function checkUsageLimits(userId: string, tier: UserTier): Promise<
   try {
     const { supabase } = await import('./supabase')
 
+    // Try RPC first (Dynamic count, handles cancelled tests correctly)
+    const { data: rpcData, error: rpcError } = await supabase.rpc('check_usage_limit', { p_user_id: userId })
+
+    if (!rpcError && rpcData?.[0]) {
+      const result = rpcData[0]
+      return {
+        canRun: result.can_run,
+        testsUsed: result.tests_used,
+        testsLimit: result.tests_limit,
+        reason: !result.can_run ? `Monthly limit reached (${result.tests_used}/${result.tests_limit} tests)` : undefined
+      }
+    }
+
+    // Fallback: Check user_subscriptions table directly
     const { data, error } = await supabase
       .from('user_subscriptions')
       .select('tests_used_this_month')
