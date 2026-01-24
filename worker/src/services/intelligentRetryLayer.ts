@@ -8,7 +8,7 @@
 import { LLMAction, VisionContext, VisionElement, SelfHealingInfo, ActionExecutionResult } from '../types'
 import { UnifiedBrainService } from './unifiedBrainService'
 import { PlaywrightRunner, RunnerSession } from '../runners/playwright'
-import { AppiumRunner } from '../runners/appium'
+
 import { ActionContext, isIRLAllowed, isSelfHealingAllowed } from '../types/actionContext'
 
 export interface RetryConfig {
@@ -50,18 +50,15 @@ export interface RetryResult {
 export class IntelligentRetryLayer {
   private unifiedBrain: UnifiedBrainService
   private playwrightRunner?: PlaywrightRunner
-  private appiumRunner?: AppiumRunner
   private defaultConfig: Required<RetryConfig>
 
   constructor(
     unifiedBrain: UnifiedBrainService,
     playwrightRunner?: PlaywrightRunner,
-    appiumRunner?: AppiumRunner,
     config?: RetryConfig
   ) {
     this.unifiedBrain = unifiedBrain
     this.playwrightRunner = playwrightRunner
-    this.appiumRunner = appiumRunner
 
     this.defaultConfig = {
       maxRetries: config?.maxRetries ?? 3,
@@ -93,7 +90,7 @@ export class IntelligentRetryLayer {
     sessionId: string,
     action: LLMAction,
     context: VisionContext,
-    isMobile: boolean = false,
+    isMobile: boolean = false, // Deprecated, kept for compatibility but ignored
     config?: RetryConfig,
     actionContext: ActionContext = ActionContext.NORMAL
   ): Promise<RetryResult> {
@@ -109,7 +106,7 @@ export class IntelligentRetryLayer {
     }
 
     const retryConfig = { ...this.defaultConfig, ...config }
-    const runner = isMobile ? this.appiumRunner : this.playwrightRunner
+    const runner = this.playwrightRunner
 
     if (!runner) {
       throw new Error('No runner available for execution')
@@ -165,7 +162,6 @@ export class IntelligentRetryLayer {
             action,
             context,
             errorMessage,
-            isMobile,
             retryConfig.enableVisionMatching
           )
 
@@ -228,7 +224,6 @@ export class IntelligentRetryLayer {
     action: LLMAction,
     context: VisionContext,
     errorMessage: string,
-    isMobile: boolean,
     enableVisionMatching: boolean
   ): Promise<SelfHealingInfo | null> {
     if (!action.selector) {
@@ -238,7 +233,7 @@ export class IntelligentRetryLayer {
     console.log(`[IRL] Attempting self-healing for selector: ${action.selector}`)
 
     // Strategy 1: DOM-based healing (fast, no AI needed)
-    const domHealing = await this.healViaDOMAnalysis(sessionId, action, context, isMobile)
+    const domHealing = await this.healViaDOMAnalysis(sessionId, action, context)
     if (domHealing) {
       return domHealing
     }
@@ -246,7 +241,7 @@ export class IntelligentRetryLayer {
     // Strategy 2: Vision + AI matching (slower, more accurate)
     // Use UnifiedBrainService for vision matching
     if (enableVisionMatching) {
-      const visionHealing = await this.healViaVisionMatching(sessionId, action, context, errorMessage, isMobile)
+      const visionHealing = await this.healViaVisionMatching(sessionId, action, context, errorMessage)
       if (visionHealing) {
         return visionHealing
       }
@@ -261,19 +256,16 @@ export class IntelligentRetryLayer {
   private async healViaDOMAnalysis(
     sessionId: string,
     action: LLMAction,
-    context: VisionContext,
-    isMobile: boolean
+    context: VisionContext
   ): Promise<SelfHealingInfo | null> {
     const originalSelector = action.selector!
-    const runner = isMobile ? this.appiumRunner : this.playwrightRunner
+    const runner = this.playwrightRunner
 
     if (!runner) return null
 
     try {
       // Get fresh DOM snapshot
-      const domSnapshot = isMobile
-        ? await this.appiumRunner!.getPageSource(sessionId)
-        : await this.playwrightRunner!.getDOMSnapshot(sessionId)
+      const domSnapshot = await this.playwrightRunner!.getDOMSnapshot(sessionId)
 
       // Extract text hint from action
       const textHint = this.extractTextHint(action)
@@ -283,7 +275,7 @@ export class IntelligentRetryLayer {
         const textMatch = this.findElementByText(domSnapshot, textHint, action.action)
         if (textMatch) {
           // Verify element exists and is actionable
-          if (await this.verifySelector(sessionId, textMatch, isMobile)) {
+          if (await this.verifySelector(sessionId, textMatch)) {
             return {
               strategy: 'text',
               originalSelector,
@@ -297,7 +289,7 @@ export class IntelligentRetryLayer {
 
       // Strategy 2: Attribute-based matching (ID prefix, data attributes)
       const attributeMatch = this.findElementByAttributes(domSnapshot, originalSelector, action)
-      if (attributeMatch && await this.verifySelector(sessionId, attributeMatch, isMobile)) {
+      if (attributeMatch && await this.verifySelector(sessionId, attributeMatch)) {
         return {
           strategy: 'attribute',
           originalSelector,
@@ -309,7 +301,7 @@ export class IntelligentRetryLayer {
 
       // Strategy 3: Structural matching (position-based)
       const structuralMatch = this.findElementByStructure(domSnapshot, originalSelector, action)
-      if (structuralMatch && await this.verifySelector(sessionId, structuralMatch, isMobile)) {
+      if (structuralMatch && await this.verifySelector(sessionId, structuralMatch)) {
         return {
           strategy: 'position',
           originalSelector,
@@ -332,21 +324,18 @@ export class IntelligentRetryLayer {
     sessionId: string,
     action: LLMAction,
     context: VisionContext,
-    errorMessage: string,
-    isMobile: boolean
+    errorMessage: string
   ): Promise<SelfHealingInfo | null> {
     // Use UnifiedBrainService for self-healing
     if (!this.unifiedBrain) return null
 
     try {
       // Capture current screenshot
-      const runner = isMobile ? this.appiumRunner : this.playwrightRunner
+      const runner = this.playwrightRunner
       if (!runner) return null
 
       const screenshot = await runner.captureScreenshot(sessionId)
-      const domSnapshot = isMobile
-        ? await this.appiumRunner!.getPageSource(sessionId)
-        : await this.playwrightRunner!.getDOMSnapshot(sessionId)
+      const domSnapshot = await this.playwrightRunner!.getDOMSnapshot(sessionId)
 
       // Ask AI to find alternative selector based on vision + DOM
       const prompt = this.buildVisionHealingPrompt(action, context, errorMessage)
@@ -357,7 +346,7 @@ export class IntelligentRetryLayer {
       // Find best matching element from analysis
       const bestMatch = this.findBestMatchFromVision(analysis, action, context)
 
-      if (bestMatch && await this.verifySelector(sessionId, bestMatch, isMobile)) {
+      if (bestMatch && await this.verifySelector(sessionId, bestMatch)) {
         return {
           strategy: 'vision',
           originalSelector: action.selector!,
@@ -699,23 +688,16 @@ If no good alternative exists, return: {"action": "wait", "description": "No via
 Analyze the screenshot and DOM to find a working alternative selector that achieves the same goal.`
   }
 
-  private async verifySelector(sessionId: string, selector: string, isMobile: boolean): Promise<boolean> {
+  private async verifySelector(sessionId: string, selector: string): Promise<boolean> {
     try {
-      const runner = isMobile ? this.appiumRunner : this.playwrightRunner
-      if (!runner) return false
+      if (!this.playwrightRunner) return false
 
-      // Try to find element (quick verification)
-      if (isMobile) {
-        // For Appium, we'd need to check if element exists
-        // Simplified: assume it works if we got this far
-        return true
-      } else {
-        const session = this.playwrightRunner!.getSession(sessionId)
-        if (session?.page) {
-          const count = await session.page.locator(selector).count()
-          return count > 0
-        }
+      const session = this.playwrightRunner.getSession(sessionId)
+      if (session?.page) {
+        const count = await session.page.locator(selector).count()
+        return count > 0
       }
+      return false
       return false
     } catch {
       return false

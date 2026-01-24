@@ -39,8 +39,7 @@ export * from './comprehensive'
 
 export enum BuildType {
   WEB = 'web',
-  ANDROID = 'android',
-  IOS = 'ios',
+
 }
 
 export enum TestRunStatus {
@@ -58,8 +57,7 @@ export enum DeviceProfile {
   CHROME_LATEST = 'chrome-latest',
   FIREFOX_LATEST = 'firefox-latest',
   SAFARI_LATEST = 'safari-latest',
-  ANDROID_EMULATOR = 'android-emulator',
-  IOS_SIMULATOR = 'ios-simulator',
+
 }
 
 export interface Build {

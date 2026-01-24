@@ -56,7 +56,7 @@ import { StorageService } from '../services/storage'
 
 import { PineconeService } from '../services/pinecone'
 import { PlaywrightRunner, RunnerSession } from '../runners/playwright'
-import { AppiumRunner } from '../runners/appium'
+
 import { config } from '../config/env'
 import { formatErrorForStep } from '../utils/errorFormatter'
 import { ComprehensiveTestingService } from '../services/comprehensiveTesting'
@@ -125,7 +125,7 @@ export class TestProcessor {
 
   private pineconeService: PineconeService | null
   private playwrightRunner: PlaywrightRunner
-  private appiumRunner: AppiumRunner | null
+
   private redis: Redis
   private apiUrl: string
   private comprehensiveTesting: ComprehensiveTestingService
@@ -165,7 +165,7 @@ export class TestProcessor {
 
     pineconeService: PineconeService | null,
     playwrightRunner: PlaywrightRunner,
-    appiumRunner: AppiumRunner | null,
+
     visionValidator?: VisionValidatorService | null,
     visionValidatorInterval: number = 0,
     redis?: Redis // Optional - will create if not provided for backward compatibility
@@ -175,7 +175,7 @@ export class TestProcessor {
 
     this.pineconeService = pineconeService
     this.playwrightRunner = playwrightRunner
-    this.appiumRunner = appiumRunner
+
     this.visionValidator = visionValidator || null
     this.visionValidatorInterval = visionValidatorInterval
     // Use injected Redis or create new connection (backward compatible)
@@ -189,7 +189,6 @@ export class TestProcessor {
     this.retryLayer = new IntelligentRetryLayer(
       unifiedBrain,
       playwrightRunner,
-      appiumRunner || undefined,
       {
         maxRetries: config.irl?.maxRetries ?? 3,
         initialDelay: config.irl?.initialDelay ?? 500,
@@ -203,7 +202,7 @@ export class TestProcessor {
 
     this.runLogger = new RunLogger(storageService, pineconeService, this.apiUrl)
     this.contextSynthesizer = new ContextSynthesizer(unifiedBrain, this.comprehensiveTesting)
-    this.testExecutor = new TestExecutor(playwrightRunner, appiumRunner, this.retryLayer)
+    this.testExecutor = new TestExecutor(playwrightRunner, this.retryLayer)
     this.visualDiffService = new VisualDiffService(0.1) // 0.1 threshold for pixel comparison
 
     // Initialize new enhanced services
@@ -689,12 +688,7 @@ export class TestProcessor {
 
     try {
       // Select runner based on build type
-      const isMobile = build.type === BuildType.ANDROID || build.type === BuildType.IOS
-      const runner = isMobile ? this.appiumRunner : this.playwrightRunner
-
-      if (!runner) {
-        throw new Error(`Runner not available for ${isMobile ? 'mobile' : 'web'} tests`)
-      }
+      const runner = this.playwrightRunner
 
       // Reserve test runner session
       console.log(`[${runId}] [${browserType.toUpperCase()}] Reserving ${build.type} session...`)
@@ -1058,9 +1052,7 @@ ${parsedInstructions.structuredPlan}
         if ((options?.allPages || options?.testMode === 'all') && !siteDiscoveryComplete) {
           try {
             console.log(`[${runId}] [${browserType.toUpperCase()}] Starting site discovery phase - mapping all pages from landing page...`)
-            const discoveryDom = await (isMobile
-              ? (this.appiumRunner?.getPageSource(session.id) || Promise.reject(new Error('Appium not available')))
-              : this.playwrightRunner.getDOMSnapshot(session.id))
+            const discoveryDom = await this.playwrightRunner.getDOMSnapshot(session.id)
 
             // Extract all internal links from the page
             const baseUrl = new URL(build.url || '').origin
@@ -1197,7 +1189,7 @@ ${parsedInstructions.structuredPlan}
             console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Synthesizing context...`)
             const contextResult = await this.contextSynthesizer.synthesizeContext({
               sessionId: session.id,
-              isMobile,
+              isMobile: false,
               goal,
               visitedSelectors,
               visitedUrls,
@@ -1206,7 +1198,7 @@ ${parsedInstructions.structuredPlan}
               isSelectorBlocked,
               comprehensiveTesting: this.comprehensiveTesting,
               playwrightRunner: this.playwrightRunner,
-              appiumRunner: this.appiumRunner || undefined,
+              appiumRunner: undefined,
               stepNumber,
               runId,
               browserType,
@@ -1565,7 +1557,7 @@ ${parsedInstructions.structuredPlan}
               action,
               selectorHealingMap,
               projectId,
-              isMobile,
+              isMobile: false,
               session,
               currentUrl: currentUrl || build.url,
               stepNumber
@@ -1617,11 +1609,9 @@ ${parsedInstructions.structuredPlan}
               sessionId: session.id,
               action,
               context: filteredContext,
-              isMobile,
               enableIRL: true,
               retryLayer: this.retryLayer,
               playwrightRunner: this.playwrightRunner,
-              appiumRunner: this.appiumRunner || undefined,
               runId,
               browserType,
               stepNumber,
@@ -1637,7 +1627,7 @@ ${parsedInstructions.structuredPlan}
                 // Persist healing memory to database (project-scoped)
                 await selfHealingHandler.persistHealing({
                   projectId,
-                  isMobile,
+                  isMobile: false,
                   session,
                   currentUrl: currentUrl || build.url,
                   originalSelector: learnedKey,
@@ -1659,7 +1649,7 @@ ${parsedInstructions.structuredPlan}
             // Inner try block for step execution - errors caught by stepError catch
             try {
               // Capture state first (needed for vision validator and artifacts)
-              const stateResult = await this.testExecutor.captureState(session.id, isMobile)
+              const stateResult = await this.testExecutor.captureState(session.id, false)
 
               // Broadcast frame to WebSocket (via Redis)
               if (stateResult?.screenshot) {
@@ -1670,7 +1660,7 @@ ${parsedInstructions.structuredPlan}
               // Capture element bounds using TestExecutor
               const boundsResult = await this.testExecutor.captureElementBounds(
                 session.id,
-                isMobile,
+                false,
                 action,
                 healingMeta
               )
@@ -1974,27 +1964,26 @@ ${parsedInstructions.structuredPlan}
                 artifacts.push(errorScreenshotUrl)
 
                 // Capture element bounds for failed step (to show what element failed)
-                if (!isMobile) {
-                  try {
-                    errorElementBounds = await this.playwrightRunner.captureElementBounds(session.id)
+                try {
+                  errorElementBounds = await this.playwrightRunner.captureElementBounds(session.id)
 
-                    // Mark the target element as failed
-                    if (action && action.selector && errorElementBounds.length > 0) {
-                      const failedSelector = action.selector
-                      const failedElement = errorElementBounds.find(e => e.selector === failedSelector)
-                      if (failedElement) {
-                        failedElement.interactionType = 'failed'
-                        errorTargetElementBounds = {
-                          selector: failedElement.selector,
-                          bounds: failedElement.bounds,
-                          interactionType: 'failed',
-                        }
+                  // Mark the target element as failed
+                  if (action && action.selector && errorElementBounds.length > 0) {
+                    const failedSelector = action.selector
+                    const failedElement = errorElementBounds.find(e => e.selector === failedSelector)
+                    if (failedElement) {
+                      failedElement.interactionType = 'failed'
+                      errorTargetElementBounds = {
+                        selector: failedElement.selector,
+                        bounds: failedElement.bounds,
+                        interactionType: 'failed',
                       }
                     }
-                  } catch (boundsError: any) {
-                    console.warn(`[${runId}] [${browserType.toUpperCase()}] Failed to capture error element bounds:`, boundsError.message)
                   }
+                } catch (boundsError: any) {
+                  console.warn(`[${runId}] [${browserType.toUpperCase()}] Failed to capture error element bounds:`, boundsError.message)
                 }
+
               } catch (screenshotError: any) {
                 console.warn(`[${runId}] [${browserType.toUpperCase()}] Failed to capture error screenshot:`, screenshotError.message)
               }
@@ -2017,7 +2006,7 @@ ${parsedInstructions.structuredPlan}
                 }
 
                 // Get DOM snapshot and comprehensive data for context
-                const domSnapshot = !isMobile && session.page
+                const domSnapshot = session.page
                   ? await this.playwrightRunner.getDOMSnapshot(session.id).catch(() => '')
                   : ''
 
@@ -2092,7 +2081,7 @@ ${parsedInstructions.structuredPlan}
                 // Try multiple recovery strategies
                 const recovered = await this.testExecutor.recoverFromErrors(
                   session.id,
-                  isMobile,
+                  false, // isMobile always false
                   build.url,
                   runId,
                   browserType,
@@ -2243,17 +2232,13 @@ ${parsedInstructions.structuredPlan}
           } finally {
             // Release session and upload videos/traces
             if (session) {
-              const runner = build.type === BuildType.WEB
-                ? this.playwrightRunner
-                : (this.appiumRunner || this.playwrightRunner) // Fallback to playwright if appium not available (shouldn't happen due to validation)
+              const runner = this.playwrightRunner
 
               try {
                 // Release session and get video/trace paths (only Playwright returns paths)
                 let releaseResult: { videoPath: string | null; tracePath: string | null } | void = undefined
-                if (build.type === BuildType.WEB && this.playwrightRunner) {
+                if (this.playwrightRunner) {
                   releaseResult = await this.playwrightRunner.releaseSession(session.id)
-                } else {
-                  await runner.releaseSession(session.id)
                 }
                 console.log(`[${runId}] [${browserType.toUpperCase()}] Session released`)
 
@@ -2408,13 +2393,7 @@ ${parsedInstructions.structuredPlan}
     // Otherwise, use runId as the parent (single browser test)
     const parentRunId = jobData.parentRunId || runId
 
-    // Validate mobile test support
-    const isMobile = build.type === BuildType.ANDROID || build.type === BuildType.IOS
-    if (isMobile && !this.appiumRunner) {
-      const errorMsg = `Mobile testing (${build.type}) is not available. Appium is disabled. Set ENABLE_APPIUM=true in worker/.env to enable mobile testing.`
-      console.error(`[${runId}] ${errorMsg}`)
-      throw new Error(errorMsg)
-    }
+
 
     // Update comprehensive testing service with design spec and vision validator
     if (options && options.designSpec) {

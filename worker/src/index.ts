@@ -39,7 +39,7 @@ import { UnifiedBrainService } from './services/unifiedBrainService'
 import { StorageService } from './services/storage'
 import { PineconeService } from './services/pinecone'
 import { PlaywrightRunner } from './runners/playwright'
-import { AppiumRunner } from './runners/appium'
+
 import { TestProcessor } from './processors/testProcessor'
 import { VisionValidatorService } from './services/visionValidator'
 import { StateManager } from './services/StateManager'
@@ -195,9 +195,8 @@ function getPineconeService(): PineconeService | null {
 }
 const playwrightRunner = new PlaywrightRunner(config.testRunners.playwrightGridUrl)
 // Appium is disabled by default - set ENABLE_APPIUM=true to enable
-const appiumRunner = config.testRunners.appiumEnabled
-  ? new AppiumRunner(config.testRunners.appiumUrl)
-  : null
+// Appium is disabled/removed
+const appiumRunner = null
 
 // Optional vision validator (OpenAI GPT-4o with selective usage)
 let visionValidatorService: VisionValidatorService | null = null
@@ -231,7 +230,7 @@ const testProcessor = new TestProcessor(
   storageService,
   getPineconeService(), // Use lazy getter - will return null if API key not available
   playwrightRunner,
-  appiumRunner, // Can be null if Appium is disabled
+  // appiumRunner removed
   visionValidatorService,
   config.vision.validatorInterval
 )

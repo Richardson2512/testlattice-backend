@@ -1,20 +1,17 @@
 // TestExecutor: Handles action execution, error recovery, and session management
 import { LLMAction, VisionContext, ActionExecutionResult, SelfHealingInfo } from '../types'
 import { PlaywrightRunner } from '../runners/playwright'
-import { AppiumRunner } from '../runners/appium'
 import { IntelligentRetryLayer } from '../services/intelligentRetryLayer'
-import { ActionContext, isIRLAllowed, isPageLevelFallbackAllowed } from '../types/actionContext'
+import { ActionContext, isIRLAllowed } from '../types/actionContext'
 import { assertNoIRLDuringPreflight } from '../services/preflightInvariants'
 
 export interface ExecuteActionParams {
   sessionId: string
   action: LLMAction
   context: VisionContext
-  isMobile: boolean
   enableIRL: boolean
   retryLayer?: IntelligentRetryLayer | null
   playwrightRunner?: PlaywrightRunner
-  appiumRunner?: AppiumRunner
   runId: string
   browserType: 'chromium' | 'firefox' | 'webkit'
   stepNumber: number
@@ -49,9 +46,9 @@ export interface CaptureElementBoundsResult {
 export class TestExecutor {
   constructor(
     private playwrightRunner: PlaywrightRunner,
-    private appiumRunner: AppiumRunner | null,
+    // Mobile support removed
     private retryLayer: IntelligentRetryLayer | null
-  ) {}
+  ) { }
 
   /**
    * Execute an action with Intelligent Retry Layer (IRL) if enabled
@@ -61,20 +58,17 @@ export class TestExecutor {
       sessionId,
       action,
       context,
-      isMobile,
       enableIRL,
       retryLayer,
       playwrightRunner,
-      appiumRunner,
       runId,
       browserType,
       stepNumber
     } = params
 
-    const runner = isMobile ? (appiumRunner || params.appiumRunner) : playwrightRunner
-    if (isMobile && !runner) {
-      throw new Error('Appium runner is required for mobile tests but is not available')
-    }
+    // Always use playwright runner
+    const runner = playwrightRunner || this.playwrightRunner
+
     let executionResult: ActionExecutionResult | void
     let healingMeta: SelfHealingInfo | undefined
 
@@ -85,13 +79,14 @@ export class TestExecutor {
     // CRITICAL: IRL is FORBIDDEN in COOKIE_CONSENT context and during PREFLIGHT
     const actionContext = params.actionContext || ActionContext.NORMAL
     const irlAllowed = isIRLAllowed(actionContext)
-    
+
+    // For web tests, we pass isMobile=false to retryLayer
     if (enableIRL && retryLayer && irlAllowed && (action.action === 'click' || action.action === 'type' || action.action === 'assert')) {
       const retryResult = await retryLayer.executeWithRetry(
         sessionId,
         action,
         context,
-        isMobile,
+        false, // isMobile always false
         {
           maxRetries: 3,
           enableVisionMatching: true,
@@ -118,7 +113,7 @@ export class TestExecutor {
       }
     } else {
       // Fallback to direct execution for non-retryable actions
-      executionResult = await (runner as any).executeAction(sessionId, action) as ActionExecutionResult | void
+      executionResult = await runner.executeAction(sessionId, action) as ActionExecutionResult | void
       healingMeta = executionResult?.healing
     }
 
@@ -131,15 +126,9 @@ export class TestExecutor {
   /**
    * Capture current page state (screenshot and DOM snapshot)
    */
-  async captureState(sessionId: string, isMobile: boolean): Promise<CaptureStateResult> {
-    if (isMobile && !this.appiumRunner) {
-      throw new Error('Appium runner is required for mobile tests but is not available')
-    }
-    const runner = isMobile ? this.appiumRunner! : this.playwrightRunner
-    const screenshot = await runner.captureScreenshot(sessionId)
-    const domSnapshot = await (isMobile
-      ? this.appiumRunner!.getPageSource(sessionId)
-      : this.playwrightRunner.getDOMSnapshot(sessionId))
+  async captureState(sessionId: string, _isMobile: boolean = false): Promise<CaptureStateResult> {
+    const screenshot = await this.playwrightRunner.captureScreenshot(sessionId)
+    const domSnapshot = await this.playwrightRunner.getDOMSnapshot(sessionId)
 
     return {
       screenshot,
@@ -158,7 +147,7 @@ export class TestExecutor {
    */
   async dismissOverlays(
     sessionId: string,
-    isMobile: boolean,
+    _isMobile: boolean,
     runId: string,
     browserType: 'chromium' | 'firefox' | 'webkit',
     stepNumber: number
@@ -174,11 +163,11 @@ export class TestExecutor {
    */
   async captureElementBounds(
     sessionId: string,
-    isMobile: boolean,
+    _isMobile: boolean,
     action: LLMAction | null,
     healing?: SelfHealingInfo
   ): Promise<CaptureElementBoundsResult> {
-    if (isMobile || !this.playwrightRunner) {
+    if (!this.playwrightRunner) {
       return { elementBounds: [] }
     }
 
@@ -225,31 +214,26 @@ export class TestExecutor {
    */
   async recoverFromErrors(
     sessionId: string,
-    isMobile: boolean,
+    _isMobile: boolean,
     buildUrl: string | undefined,
     runId: string,
     browserType: 'chromium' | 'firefox' | 'webkit',
     recentErrors: number
   ): Promise<boolean> {
-    if (isMobile && !this.appiumRunner) {
-      return false // Can't recover mobile tests without Appium
-    }
-    const runner = isMobile ? this.appiumRunner! : this.playwrightRunner
+    const runner = this.playwrightRunner
 
     // Strategy 1: Wait for page to stabilize (sometimes elements load late)
     if (recentErrors >= 2) {
       try {
         console.log(`[${runId}] [${browserType.toUpperCase()}] Recovery: Waiting for page to stabilize...`)
         await new Promise(resolve => setTimeout(resolve, 2000))
-        
+
         // Check if page is still loading
-        if (!isMobile && this.playwrightRunner) {
-          const session = this.playwrightRunner.getSession(sessionId)
-          if (session?.page) {
-            await session.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-            console.log(`[${runId}] [${browserType.toUpperCase()}] Recovery: Page stabilized`)
-            return true
-          }
+        const session = this.playwrightRunner.getSession(sessionId)
+        if (session?.page) {
+          await session.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { })
+          console.log(`[${runId}] [${browserType.toUpperCase()}] Recovery: Page stabilized`)
+          return true
         }
       } catch (waitError: any) {
         console.warn(`[${runId}] [${browserType.toUpperCase()}] Recovery wait failed:`, waitError.message)
@@ -280,9 +264,7 @@ export class TestExecutor {
     // Strategy 4: Try navigating back or refreshing
     if (recentErrors >= 5) {
       try {
-        const currentUrl = await (isMobile
-          ? this.appiumRunner!.getCurrentUrl(sessionId).catch(() => buildUrl || '')
-          : this.playwrightRunner.getCurrentUrl(sessionId).catch(() => buildUrl || ''))
+        const currentUrl = await this.playwrightRunner.getCurrentUrl(sessionId).catch(() => buildUrl || '')
 
         // Try navigating to a different page or refreshing
         if (currentUrl && currentUrl !== buildUrl) {
@@ -297,14 +279,12 @@ export class TestExecutor {
           return true
         } else if (currentUrl) {
           // Try page reload
-          if (!isMobile && this.playwrightRunner) {
-            const session = this.playwrightRunner.getSession(sessionId)
-            if (session?.page) {
-              console.log(`[${runId}] [${browserType.toUpperCase()}] Recovery: Reloading page`)
-              await session.page.reload({ waitUntil: 'networkidle', timeout: 10000 }).catch(() => {})
-              await new Promise(resolve => setTimeout(resolve, 2000))
-              return true
-            }
+          const session = this.playwrightRunner.getSession(sessionId)
+          if (session?.page) {
+            console.log(`[${runId}] [${browserType.toUpperCase()}] Recovery: Reloading page`)
+            await session.page.reload({ waitUntil: 'networkidle', timeout: 10000 }).catch(() => { })
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            return true
           }
         }
       } catch (navError: any) {
@@ -313,7 +293,7 @@ export class TestExecutor {
     }
 
     // Strategy 5: Check for element visibility issues
-    if (recentErrors >= 6 && !isMobile && this.playwrightRunner) {
+    if (recentErrors >= 6) {
       try {
         const session = this.playwrightRunner.getSession(sessionId)
         if (session?.page) {
@@ -325,17 +305,17 @@ export class TestExecutor {
                 const rect = el.getBoundingClientRect()
                 const style = window.getComputedStyle(el)
                 return style.display !== 'none' &&
-                       style.visibility !== 'hidden' &&
-                       rect.width > 0 &&
-                       rect.height > 0 &&
-                       rect.top >= 0 &&
-                       rect.left >= 0 &&
-                       rect.bottom <= window.innerHeight &&
-                       rect.right <= window.innerWidth
+                  style.visibility !== 'hidden' &&
+                  rect.width > 0 &&
+                  rect.height > 0 &&
+                  rect.top >= 0 &&
+                  rect.left >= 0 &&
+                  rect.bottom <= window.innerHeight &&
+                  rect.right <= window.innerWidth
               })
               .length
           })
-          
+
           if (visibleElements === 0) {
             console.log(`[${runId}] [${browserType.toUpperCase()}] Recovery: No visible elements found, scrolling to top`)
             await runner.executeAction(sessionId, {
@@ -355,4 +335,3 @@ export class TestExecutor {
     return false
   }
 }
-
