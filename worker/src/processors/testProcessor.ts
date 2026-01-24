@@ -1112,6 +1112,9 @@ ${parsedInstructions.structuredPlan}
           }
         }
 
+        // State for locally tracking SSO tests in this browser session
+        const testedSSOPages = new Set<string>()
+
         // Main execution loop
         while (stepNumber < maxSteps && Date.now() - startTime < maxDuration) {
           // Check if test run has been stopped or cancelled
@@ -1226,6 +1229,40 @@ ${parsedInstructions.structuredPlan}
             // Log user instructions if present (remind AI of priority)
             if (hasUserInstructions) {
               console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: 🎯 Following user instructions: "${userInstructions}"`)
+            }
+
+            // REGISTERED SSO SMOKE TEST (New Requirement)
+            // Opportunistically detect and smoke-test SSO buttons on new pages
+            // We check only if we haven't already tested this exact URL to avoid loops
+            const currentPageUrl = session.page.url()
+            // Normalize URL to avoid re-testing query param changes if not relevant
+            const normalizedPageUrl = currentPageUrl.split('?')[0]
+
+            if (!testedSSOPages.has(normalizedPageUrl)) {
+              // Quick heuristic check before full analysis
+              const pageText = await session.page.evaluate(() => document.body.innerText.toLowerCase().substring(0, 5000))
+              if (pageText.includes('sign in') || pageText.includes('log in') || pageText.includes('sign up')) {
+                console.log(`[${runId}] [${browserType.toUpperCase()}] Checking for SSO options on potential auth page...`)
+                const authAnalysis = await this.authFlowAnalyzer.detectAuthMethods(session.page, runId, stepNumber)
+
+                if (authAnalysis.authMethods.some(m => m.type === 'sso')) {
+                  const ssoMethods = authAnalysis.authMethods.filter(m => m.type === 'sso' && m.selector && m.provider)
+                  console.log(`[${runId}] [${browserType.toUpperCase()}] SSO detected: ${ssoMethods.map(m => m.provider).join(', ')}. Initiating smoke tests...`)
+
+                  for (const ssoMethod of ssoMethods) {
+                    if (ssoMethod.selector && ssoMethod.provider) {
+                      await this.authFlowAnalyzer.smokeTestSSO(
+                        session.page,
+                        runId,
+                        stepNumber,
+                        ssoMethod.selector,
+                        ssoMethod.provider
+                      )
+                    }
+                  }
+                }
+                testedSSOPages.add(normalizedPageUrl)
+              }
             }
 
             // GOD MODE: Check for manual actions BEFORE generating AI action

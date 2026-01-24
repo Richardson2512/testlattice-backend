@@ -88,27 +88,27 @@ export interface AuthenticationFlowAnalysis {
   authMethodsDetected: AuthMethod[]
   mfaDetected: boolean
   ssoProviders: string[]
-  
+
   // UX issues
   authUxIssues: AuthUXIssue[]
-  
+
   // Post-login validation
   postLoginValidation?: PostLoginValidation
-  
+
   // Rate limit detection
   rateLimitDetection?: RateLimitDetection
-  
+
   // Signup analysis
   signupStepsDetected?: SignupStep[]
   currentStepIndex?: number
-  
+
   // Verification handoff
   verificationHandoff?: VerificationHandoff
-  
+
   // Password policy
   passwordPolicySummary?: PasswordPolicy
   passwordUxIssues: PasswordUXIssue[]
-  
+
   // Conversion friction
   conversionBlockers: ConversionBlocker[]
 }
@@ -173,37 +173,50 @@ export class AuthenticationFlowAnalyzer {
           })
         }
 
-        // Detect SSO providers
-        const ssoButtons = Array.from(document.querySelectorAll('button, a')).filter(el => {
+        // Detect SSO providers with specific selectors
+        const ssoButtons = Array.from(document.querySelectorAll('button, a[role="button"], a.btn, a.button, div[role="button"]'))
+
+        ssoButtons.forEach(el => {
           const text = el.textContent?.toLowerCase() || ''
           const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || ''
           const className = el.className?.toLowerCase() || ''
-          
-          if (text.includes('google') || ariaLabel.includes('google') || className.includes('google')) {
-            sso.push('google')
-            return true
-          }
-          if (text.includes('github') || ariaLabel.includes('github') || className.includes('github')) {
-            sso.push('github')
-            return true
-          }
-          if (text.includes('apple') || ariaLabel.includes('apple') || className.includes('apple')) {
-            sso.push('apple')
-            return true
-          }
-          if (text.includes('microsoft') || ariaLabel.includes('microsoft') || className.includes('microsoft')) {
-            sso.push('microsoft')
-            return true
-          }
-          return false
-        })
+          const href = el.getAttribute('href')?.toLowerCase() || ''
 
-        if (sso.length > 0) {
-          methods.push({
-            type: 'sso',
-            detected: true,
-          })
-        }
+          const providers = ['google', 'github', 'apple', 'microsoft', 'facebook', 'linkedin', 'twitter']
+          const matchedProvider = providers.find(p =>
+            text.includes(p) || ariaLabel.includes(p) || className.includes(p) || href.includes(p)
+          )
+
+          if (matchedProvider) {
+            // Generate a usable selector
+            let selector = ''
+            if (el.id) {
+              selector = `#${el.id}`
+            } else if (el.getAttribute('aria-label')) {
+              selector = `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`
+            } else {
+              // Create a text-based selector (Playwright friendly if needed, but here we use CSS roughly)
+              // Since we are in browser context, we can't fully generate Playwright selectors easily.
+              // Best effort: class based or attribute based
+              if (el.className && el.className.split(' ').length < 3) {
+                selector = `.${el.className.split(' ').join('.')}`
+              } else {
+                selector = `${el.tagName.toLowerCase()}:contains("${text.substring(0, 15)}")` // Pseudo-selector for logic
+              }
+            }
+
+            // Push to methods
+            methods.push({
+              type: 'sso',
+              provider: matchedProvider,
+              selector: selector, // Note: This might need refinement in Node context
+              detected: true
+            })
+            if (!sso.includes(matchedProvider)) {
+              sso.push(matchedProvider)
+            }
+          }
+        })
 
         // Detect MFA / OTP presence
         const otpField = document.querySelector('input[type="text"][name*="otp" i], input[type="text"][name*="code" i], input[type="text"][name*="mfa" i], input[inputmode="numeric"][maxlength="6"]')
@@ -211,7 +224,7 @@ export class AuthenticationFlowAnalyzer {
           const text = el.textContent?.toLowerCase() || ''
           return text.includes('verification code') || text.includes('authenticator') || text.includes('two-factor')
         })
-        
+
         if (otpField || mfaChallenge) {
           mfa = true
           methods.push({
@@ -238,6 +251,64 @@ export class AuthenticationFlowAnalyzer {
     }
 
     return { authMethods, mfaDetected, ssoProviders }
+  }
+
+  /**
+   * SSO Smoke Test: Click button, verify redirect, go back (Registered User Context)
+   */
+  async smokeTestSSO(
+    page: Page,
+    runId: string,
+    stepNumber: number,
+    ssoSelector: string,
+    provider: string
+  ): Promise<void> {
+    this.logEmitter = getExecutionLogEmitter(runId, stepNumber)
+    const startUrl = page.url()
+
+    try {
+      this.logEmitter.log(`Smoke testing SSO provider: ${provider}`, { selector: ssoSelector })
+
+      // Click and wait for potential navigation
+      await Promise.all([
+        page.waitForNavigation({ timeout: 5000, waitUntil: 'commit' }).catch(() => { }),
+        page.click(ssoSelector)
+      ])
+
+      await page.waitForTimeout(2000)
+      const currentUrl = page.url()
+
+      // Validation Logic
+      const isExternal = !currentUrl.includes(new URL(startUrl).hostname)
+      const isErrorPage = await page.evaluate(() => {
+        const text = document.body.innerText.toLowerCase()
+        return text.includes('internal server error') ||
+          text.includes('404 not found') ||
+          text.includes('an error occurred')
+      })
+
+      const success = isExternal && !isErrorPage
+
+      this.logEmitter.log(`SSO Smoke Test (${provider}): ${success ? 'PASSED' : 'FAILED'}`, {
+        redirected_to: currentUrl,
+        external: isExternal,
+        error_page: isErrorPage
+      })
+
+      // Navigate back to continue test
+      if (currentUrl !== startUrl) {
+        await page.goBack({ waitUntil: 'domcontentloaded' })
+        await page.waitForTimeout(1000) // Stabilize
+      }
+
+    } catch (error: any) {
+      this.logEmitter.log(`SSO Smoke Test (${provider}) failed execution: ${error.message}`, { error: error.message })
+
+      // Ensure we are back at start
+      if (page.url() !== startUrl) {
+        await page.goto(startUrl).catch(() => { })
+      }
+    }
   }
 
   /**
@@ -375,7 +446,7 @@ export class AuthenticationFlowAnalyzer {
     try {
       // Check for auth cookie
       const cookies = await page.context().cookies()
-      authCookiePresent = cookies.some(c => 
+      authCookiePresent = cookies.some(c =>
         c.name.toLowerCase().includes('auth') ||
         c.name.toLowerCase().includes('token') ||
         c.name.toLowerCase().includes('session') ||
@@ -509,7 +580,7 @@ export class AuthenticationFlowAnalyzer {
     stepNumber: number
   ): Promise<RateLimitDetection> {
     this.logEmitter = getExecutionLogEmitter(runId, stepNumber)
-    
+
     this.invalidAttemptCount++
     if (this.invalidAttemptCount > this.MAX_INVALID_ATTEMPTS) {
       this.logEmitter.log('Maximum invalid attempts reached, stopping rate limit testing', {
@@ -523,7 +594,7 @@ export class AuthenticationFlowAnalyzer {
     try {
       const detection = await page.evaluate(() => {
         const bodyText = document.body.textContent?.toLowerCase() || ''
-        const hasLockoutMessage = 
+        const hasLockoutMessage =
           bodyText.includes('too many attempts') ||
           bodyText.includes('account locked') ||
           bodyText.includes('temporarily locked') ||
@@ -565,16 +636,16 @@ export class AuthenticationFlowAnalyzer {
     try {
       const analysis = await page.evaluate(() => {
         const steps: Array<{ stepNumber: number; title?: string; required: boolean; completed: boolean }> = []
-        
+
         // Look for step indicators
         const stepIndicators = Array.from(document.querySelectorAll('[class*="step" i], [data-step], [aria-label*="step" i]'))
         const progressBars = Array.from(document.querySelectorAll('[class*="progress" i], [role="progressbar"]'))
-        
+
         stepIndicators.forEach((indicator, idx) => {
           const text = indicator.textContent || ''
           const isActive = indicator.classList.toString().includes('active') || indicator.getAttribute('aria-current') === 'true'
           const isCompleted = indicator.classList.toString().includes('complete') || indicator.classList.toString().includes('done')
-          
+
           steps.push({
             stepNumber: idx + 1,
             title: text.trim() || undefined,
@@ -590,7 +661,7 @@ export class AuthenticationFlowAnalyzer {
             const sections = form.querySelectorAll('fieldset, [class*="section" i], [class*="step" i]')
             return sections.length > 1
           })
-          
+
           if (hasMultipleSections) {
             steps.push({
               stepNumber: 1,
@@ -630,9 +701,9 @@ export class AuthenticationFlowAnalyzer {
     try {
       const detection = await page.evaluate(() => {
         const bodyText = document.body.textContent?.toLowerCase() || ''
-        
+
         // Check for "check your email" screens
-        const emailVerification = 
+        const emailVerification =
           bodyText.includes('check your email') ||
           bodyText.includes('verify your email') ||
           bodyText.includes('confirmation email')
@@ -641,13 +712,13 @@ export class AuthenticationFlowAnalyzer {
         const otpField = document.querySelector('input[type="text"][name*="otp" i], input[type="text"][name*="code" i], input[inputmode="numeric"][maxlength="6"]')
 
         // Check for magic link instructions
-        const magicLink = 
+        const magicLink =
           bodyText.includes('magic link') ||
           bodyText.includes('email link') ||
           bodyText.includes('click the link')
 
         // Check for SMS verification
-        const smsVerification = 
+        const smsVerification =
           bodyText.includes('sms') ||
           bodyText.includes('text message') ||
           bodyText.includes('phone verification')
@@ -734,7 +805,7 @@ export class AuthenticationFlowAnalyzer {
           return className.includes('password') || className.includes('policy') || className.includes('requirement')
         })
         const hintText = hints.map(h => h.textContent?.toLowerCase() || '').join(' ')
-        
+
         if (hintText.includes('uppercase') || hintText.includes('capital')) {
           policy.requiresUppercase = true
         }
@@ -752,7 +823,7 @@ export class AuthenticationFlowAnalyzer {
         policy.strengthMeterPresent = !!document.querySelector('[class*="strength" i], [class*="meter" i], [role="progressbar"][aria-label*="password" i]')
 
         // Check for inline validation
-        policy.inlineValidation = passwordField.hasAttribute('oninput') || 
+        policy.inlineValidation = passwordField.hasAttribute('oninput') ||
           passwordField.hasAttribute('onchange') ||
           !!passwordField.closest('form')?.querySelector('[class*="validation" i]')
 

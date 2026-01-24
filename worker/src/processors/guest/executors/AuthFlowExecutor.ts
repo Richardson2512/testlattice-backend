@@ -155,9 +155,10 @@ export class AuthFlowExecutor {
 
             // STEP 1.5: Smoke Test SSO (If detected)
             if (fields.ssoOptions && fields.ssoOptions.length > 0) {
-                // Test the first detected SSO option to verify integrity
-                // We limit to 1 to preserve execution time and stability in guest tests
-                await this.testSSO(fields.ssoOptions[0])
+                // Test ALL detected SSO options as requested
+                for (const ssoSelector of fields.ssoOptions) {
+                    await this.testSSO(ssoSelector)
+                }
             }
 
             // STEP 2: Verify Inputs
@@ -283,7 +284,10 @@ export class AuthFlowExecutor {
 
             // STEP 1.5: Smoke Test SSO (If detected)
             if (fields.ssoOptions && fields.ssoOptions.length > 0) {
-                await this.testSSO(fields.ssoOptions[0])
+                // Test ALL detected SSO options as requested
+                for (const ssoSelector of fields.ssoOptions) {
+                    await this.testSSO(ssoSelector)
+                }
             }
 
             // STEP 2: Count Total Fields
