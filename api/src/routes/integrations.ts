@@ -6,6 +6,10 @@ import { enqueueTestRun } from '../lib/queue'
 
 export async function integrationRoutes(fastify: FastifyInstance) {
   // GitHub webhook
+  // SECURITY: Webhook-triggered tests should verify:
+  // 1. Webhook signature (HMAC validation)
+  // 2. Project owner's tier (Pro+ only for automated CI/CD tests)
+  // For now, webhooks are unauthenticated - consider adding tier check via project lookup
   fastify.post('/github/webhook', async (request, reply) => {
     try {
       // SECURITY: Webhook signature verification should be implemented

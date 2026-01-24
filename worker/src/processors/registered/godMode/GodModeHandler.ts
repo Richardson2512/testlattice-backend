@@ -155,6 +155,45 @@ export class GodModeHandler {
         }
     }
 
+    /**
+     * Execute a manual action and handle learning
+     */
+    async executeManualAction(params: {
+        runId: string
+        projectId: string | undefined
+        stepNumber: number
+        session: any // RunnerSession
+        runner: any // PlaywrightRunner | AppiumRunner
+        manualActionResult: GodModeResult
+    }): Promise<boolean> {
+        const { runId, projectId, stepNumber, session, runner, manualActionResult } = params
+        const { action: manualAction, godModeEvent } = manualActionResult
+
+        try {
+            await runner.executeAction(session.id, manualAction)
+
+            // Learn from manual action (God Mode Memory)
+            if (godModeEvent && session.page) {
+                // Defer learning slightly to allow page to settle
+                setTimeout(() => {
+                    this.learnFromManualAction({
+                        runId,
+                        projectId,
+                        stepId: `step_${stepNumber}`,
+                        godModeEvent,
+                        page: session.page,
+                        action: manualAction
+                    }).catch(() => { })
+                }, 1000)
+            }
+
+            return true
+        } catch (error: any) {
+            logger.error({ runId, error: error.message }, 'God Mode execution failed')
+            return false
+        }
+    }
+
     private delay(ms: number): Promise<void> {
         return new Promise(resolve => setTimeout(resolve, ms))
     }

@@ -211,8 +211,9 @@ export function getStepDescription(action: string, details?: StepDescriptionCont
         // ============================================================================
         // DEFAULT
         // ============================================================================
-        'default': (d) => d?.message || `Performing ${action.replace(/_/g, ' ')}...`
+        'default': (d) => d?.message || d?.note || d?.description || `Performing ${action.replace(/_/g, ' ')}...`
     }
+
 
     const description = descriptions[action] || descriptions['default']
     return typeof description === 'function' ? description(d) : description

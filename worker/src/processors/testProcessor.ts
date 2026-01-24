@@ -114,6 +114,7 @@ import { GodModeHandler } from './registered/godMode/GodModeHandler'
 import { SpeculativeActionGenerator } from './registered/execution/SpeculativeActionGenerator'
 import { DiagnosisOrchestrator, DiagnosisOrchestratorDependencies } from './registered/diagnosis/DiagnosisOrchestrator'
 import { getStepLimits } from './registered/execution/GoalBuilder'
+import { SelfHealingHandler } from './registered/self_healing/SelfHealingHandler'
 
 export { BrowserMatrixResult }
 
@@ -269,41 +270,7 @@ export class TestProcessor {
     return testProcessorUtils.delay(ms)
   }
 
-  /**
-   * Generate speculative actions based on context
-   * DELEGATED TO: SpeculativeActionGenerator module (Phase 7 refactor)
-   */
 
-
-  /**
-   * Build speculative login flow from detected form elements
-   * DELEGATED TO: SpeculativeActionGenerator module (Phase 7 refactor)
-   */
-
-
-
-
-
-  private isSubmitElement(element: VisionElement): boolean {
-    return testProcessorUtils.isSubmitElement(element)
-  }
-
-  private hasPerformedAction(
-    history: Array<{ action: LLMAction; timestamp: string }>,
-    selector: string,
-    actionName: string
-  ): boolean {
-    return testProcessorUtils.hasPerformedAction(history, selector, actionName)
-  }
-
-  private getLoginCredentials(): { username: string; password: string } {
-    return testProcessorUtils.getLoginCredentials()
-  }
-
-  /**
-   * Generate a random monkey action for exploratory testing
-   * DELEGATED TO: SpeculativeActionGenerator module (Phase 7 refactor)
-   */
 
 
   /**
@@ -340,10 +307,7 @@ export class TestProcessor {
     return state.paused
   }
 
-  /**
-   * Check for manual actions (God Mode) from API
-   * DELEGATED TO: GodModeHandler module (Phase 7 refactor)
-   */
+
 
 
   /**
@@ -1173,35 +1137,29 @@ ${parsedInstructions.structuredPlan}
             if (manualActionResult) {
               const { action: manualAction, godModeEvent } = manualActionResult
               console.log(`[${runId}] [${browserType.toUpperCase()}] God Mode: Manual action detected while paused - ${manualAction.action} on ${manualAction.selector || manualAction.target || 'element'}`)
-              // Execute manual action and continue (don't increment stepNumber yet)
-              try {
-                await runner.executeAction(session.id, manualAction)
 
-                // Learn from manual action (God Mode Memory)
-                if (godModeEvent && session.page) {
-                  await this.godModeHandler.learnFromManualAction({
-                    runId,
-                    projectId,
-                    stepId: `step_${stepNumber}`,
-                    godModeEvent,
-                    page: session.page,
-                    action: manualAction
-                  })
-                }
+
+              const success = await this.godModeHandler.executeManualAction({
+                runId,
+                projectId,
+                stepNumber,
+                session,
+                runner,
+                manualActionResult
+              })
+
+              if (success) {
                 // After manual action, wait a bit and check if still paused
                 await this.delay(500)
                 const stillPaused = await this.isPaused(runId)
                 if (stillPaused) {
-                  // Still paused, wait more
                   await new Promise(resolve => setTimeout(resolve, 1500))
                   continue
                 } else {
-                  // Resumed, continue with normal flow
                   console.log(`[${runId}] [${browserType.toUpperCase()}] Test resumed after manual action. Continuing...`)
                 }
-              } catch (manualError: any) {
-                console.error(`[${runId}] [${browserType.toUpperCase()}] Manual action execution failed:`, manualError.message)
-                // Continue waiting
+              } else {
+                // Continue waiting on error
                 await new Promise(resolve => setTimeout(resolve, 1500))
                 continue
               }
@@ -1555,43 +1513,26 @@ ${parsedInstructions.structuredPlan}
               continue
             }
 
+            // Initialize SelfHealingHandler locally for this session
+            const selfHealingHandler = new SelfHealingHandler(
+              { runId, browserType },
+              this.storageService,
+              this.playwrightRunner,
+              this.selfHealingMemory || undefined // Pass existing service if available
+            )
+
             const originalSelectorBeforeHealing = action.selector
 
-            // Check in-memory healing map first
-            if (originalSelectorBeforeHealing && selectorHealingMap.has(originalSelectorBeforeHealing)) {
-              const healedSelector = selectorHealingMap.get(originalSelectorBeforeHealing)!
-              action.selector = healedSelector
-            } else if (originalSelectorBeforeHealing && projectId && !isMobile && session.page) {
-              // Check persisted healing memory
-              try {
-                if (!this.selfHealingMemory) {
-                  this.selfHealingMemory = new SelfHealingMemoryService((this.storageService as any).supabase)
-                }
-
-                const domSnapshot = await this.playwrightRunner.getDOMSnapshot(session.id).catch(() => '')
-                const pageSignature = this.selfHealingMemory.generatePageSignature(currentUrl || build.url || '', domSnapshot)
-
-                const healedSelector = await this.selfHealingMemory.getHealingMemory(
-                  projectId,
-                  pageSignature,
-                  originalSelectorBeforeHealing
-                )
-
-                if (healedSelector) {
-                  action.selector = healedSelector
-                  selectorHealingMap.set(originalSelectorBeforeHealing, healedSelector)
-                  console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Using persisted healing memory: ${originalSelectorBeforeHealing} → ${healedSelector}`)
-                }
-              } catch (memoryError: any) {
-                // Non-blocking - continue without memory lookup
-                console.warn(`[${runId}] Failed to load healing memory:`, memoryError.message)
-              }
-            }
-
-            if (originalSelectorBeforeHealing && action.selector !== originalSelectorBeforeHealing) {
-              // Selector was healed (either from memory or map)
-              console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Using healed selector: ${action.selector}`)
-            }
+            // Delegate healing logic to handler
+            await selfHealingHandler.applyHealing({
+              action,
+              selectorHealingMap,
+              projectId,
+              isMobile,
+              session,
+              currentUrl: currentUrl || build.url,
+              stepNumber
+            })
 
             // Update environment tracking for viewport actions
             if (action.action === 'setViewport' && action.value) {
@@ -1657,28 +1598,14 @@ ${parsedInstructions.structuredPlan}
                 selectorHealingMap.set(learnedKey, healingMeta.healedSelector)
 
                 // Persist healing memory to database (project-scoped)
-                if (projectId && !isMobile && session.page) {
-                  try {
-                    if (!this.selfHealingMemory) {
-                      this.selfHealingMemory = new SelfHealingMemoryService((this.storageService as any).supabase)
-                    }
-
-                    // Generate page signature
-                    const domSnapshot = await this.playwrightRunner.getDOMSnapshot(session.id).catch(() => '')
-                    const pageSignature = this.selfHealingMemory.generatePageSignature(currentUrl || build.url || '', domSnapshot)
-
-                    // Save healing memory
-                    await this.selfHealingMemory.saveHealingMemory(
-                      projectId,
-                      pageSignature,
-                      learnedKey,
-                      healingMeta.healedSelector
-                    )
-                  } catch (memoryError: any) {
-                    // Non-blocking - don't fail if memory save fails
-                    console.warn(`[${runId}] Failed to save healing memory:`, memoryError.message)
-                  }
-                }
+                await selfHealingHandler.persistHealing({
+                  projectId,
+                  isMobile,
+                  session,
+                  currentUrl: currentUrl || build.url,
+                  originalSelector: learnedKey,
+                  healedSelector: healingMeta.healedSelector
+                })
               }
               stepHealing = {
                 strategy: healingMeta.strategy,
@@ -1873,6 +1800,12 @@ ${parsedInstructions.structuredPlan}
                 id: `step_${runId}_${browserType}_${stepNumber}`,
                 stepNumber,
                 action: action.action,
+                description: action.description || getStepDescription(action.action, {
+                  target: action.target,
+                  selector: action.selector,
+                  value: action.value,
+                  ...action
+                }, currentUrl),
                 target: action.target,
                 value: action.value,
                 timestamp: new Date().toISOString(),
