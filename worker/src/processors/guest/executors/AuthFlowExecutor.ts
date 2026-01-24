@@ -153,6 +153,13 @@ export class AuthFlowExecutor {
                 // Continue to capture final state
             }
 
+            // STEP 1.5: Smoke Test SSO (If detected)
+            if (fields.ssoOptions && fields.ssoOptions.length > 0) {
+                // Test the first detected SSO option to verify integrity
+                // We limit to 1 to preserve execution time and stability in guest tests
+                await this.testSSO(fields.ssoOptions[0])
+            }
+
             // STEP 2: Verify Inputs
             await this.captureAndRecordCompat('detect_email_field', !!fields.emailSelector, 100, {
                 selector: fields.emailSelector || 'none'
@@ -272,6 +279,11 @@ export class AuthFlowExecutor {
                 this.deps.logEmitter.log('No signup form detected - recording finding and completing test.')
                 await this.captureAndRecordCompat('no_form_found', false, 100, { note: 'No signup form detected on page' })
                 // Continue to capture final state
+            }
+
+            // STEP 1.5: Smoke Test SSO (If detected)
+            if (fields.ssoOptions && fields.ssoOptions.length > 0) {
+                await this.testSSO(fields.ssoOptions[0])
             }
 
             // STEP 2: Count Total Fields
@@ -461,7 +473,105 @@ export class AuthFlowExecutor {
             }
         }
 
+        // Detect SSO Options (Google, GitHub, Microsoft, Apple, Facebook)
+        // We look for button/link elements with specific text or aria-labels
+        const ssoKeywords = ['google', 'github', 'microsoft', 'apple', 'facebook', 'linkedin', 'twitter']
+        const ssoCandidates = await page.$$('button, a[role="button"], a.btn, a.button, div[role="button"]')
+
+        detection.ssoOptions = []
+
+        for (const candidate of ssoCandidates) {
+            const text = (await candidate.innerText()).toLowerCase()
+            const ariaLabel = (await candidate.getAttribute('aria-label') || '').toLowerCase()
+            const classList = (await candidate.getAttribute('class') || '').toLowerCase()
+            const href = (await candidate.getAttribute('href') || '').toLowerCase()
+
+            // Check if it's an SSO button
+            const matchedProvider = ssoKeywords.find(k =>
+                text.includes(k) || ariaLabel.includes(k) || classList.includes(k) || href.includes(k)
+            )
+
+            // Should verify it's not a "share" button
+            const isShare = text.includes('share') || ariaLabel.includes('share') || classList.includes('share')
+
+            if (matchedProvider && !isShare) {
+                // Generate a unique selector for this button
+                // This is a simplified selector strategy - in production we'd want robust unique selectors
+                const tagName = await candidate.evaluate(e => e.tagName.toLowerCase())
+                let uniqueSelector = ''
+
+                if (ariaLabel) {
+                    uniqueSelector = `${tagName}[aria-label="${await candidate.getAttribute('aria-label')}"]`
+                } else if (text) {
+                    // Truncate text to avoid long selectors
+                    uniqueSelector = `${tagName}:has-text("${text.substring(0, 20)}")`
+                } else {
+                    continue
+                }
+
+                detection.ssoOptions.push(uniqueSelector)
+            }
+        }
+
         return detection
+    }
+
+    /**
+     * SSO Smoke Test: Click button, verify redirect, go back
+     */
+    private async testSSO(ssoSelector: string): Promise<void> {
+        const page = this.deps.page
+        const startUrl = page.url()
+
+        try {
+            this.deps.logEmitter.log(`Testing SSO button: ${ssoSelector} (Smoke Check)`)
+
+            // Click and wait for potential navigation
+            // We use a short timeout because we expect an immediate redirect or popup
+            await Promise.all([
+                page.waitForNavigation({ timeout: 5000, waitUntil: 'commit' }).catch(() => { }),
+                page.click(ssoSelector)
+            ])
+
+            await page.waitForTimeout(2000)
+            const currentUrl = page.url()
+
+            // Validation Logic
+            const isExternal = !currentUrl.includes(new URL(startUrl).hostname)
+            const isErrorPage = await page.evaluate(() => {
+                const text = document.body.innerText.toLowerCase()
+                return text.includes('internal server error') ||
+                    text.includes('404 not found') ||
+                    text.includes('an error occurred')
+            })
+
+            const success = isExternal && !isErrorPage
+
+            await this.captureAndRecordCompat('test_sso_initiation', success, 2000, {
+                sso_selector: ssoSelector,
+                redirected_to: currentUrl,
+                external_domain: isExternal,
+                error_detected: isErrorPage
+            })
+
+            // Navigate back to continue test
+            if (currentUrl !== startUrl) {
+                await page.goBack({ waitUntil: 'domcontentloaded' })
+                await page.waitForTimeout(1000) // Stabilize
+            }
+
+        } catch (error: any) {
+            // Non-blocking failure
+            await this.captureAndRecordCompat('test_sso_initiation', false, 0, {
+                error: `SSO click failed: ${error.message}`,
+                sso_selector: ssoSelector
+            })
+
+            // Ensure we are back at start
+            if (page.url() !== startUrl) {
+                await page.goto(startUrl).catch(() => { })
+            }
+        }
     }
 
     private async detectMfa(): Promise<'otp' | 'magic_link' | null> {
@@ -555,24 +665,29 @@ export class AuthFlowExecutor {
     private async evaluateSuccess(): Promise<boolean> {
         const page = this.deps.page
 
-        // Check for common success indicators
-        const successIndicators = await page.evaluate(() => {
+        // ✅ Option A: Use Playwright locators for text matching (Safe & Correct)
+        // This avoids the SyntaxError caused by passing :has-text to document.querySelector
+        const hasLogout = await page.locator(
+            '[aria-label*="logout" i], button:has-text("Logout"), a:has-text("Sign out"), button:has-text("Sign out")'
+        ).first().isVisible().catch(() => false)
+
+        // Check for other indicators using standard DOM API
+        const indicators = await page.evaluate(() => {
             const text = document.body.innerText.toLowerCase()
             const url = window.location.href.toLowerCase()
 
             return {
                 hasDashboard: url.includes('dashboard') || text.includes('welcome'),
-                hasLogout: document.querySelector('[aria-label*="logout" i], button:has-text("Logout"), a:has-text("Sign out")') !== null,
                 hasProfile: document.querySelector('[aria-label*="profile" i], [aria-label*="account" i]') !== null,
                 noError: !text.includes('invalid') && !text.includes('incorrect') && !text.includes('wrong password')
             }
         })
 
         return (
-            successIndicators.hasDashboard ||
-            successIndicators.hasLogout ||
-            successIndicators.hasProfile
-        ) && successIndicators.noError
+            indicators.hasDashboard ||
+            hasLogout ||
+            indicators.hasProfile
+        ) && indicators.noError
     }
 
     private generateTestEmail(): string {
