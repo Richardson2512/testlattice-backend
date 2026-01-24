@@ -143,13 +143,13 @@ export class AuthFlowExecutor {
             const fields = await this.detectAuthFields()
 
             // STEP 1: Detect Login Form
-            await this.captureAndRecordCompat('detect_login_form', true, 100, {
+            await this.captureAndRecordCompat('Detecting login screen', true, 100, {
                 found: !!fields.emailSelector || !!fields.passwordSelector
             })
 
             if (!fields.emailSelector && !fields.passwordSelector) {
                 this.deps.logEmitter.log('No login form detected - recording finding and completing test.')
-                await this.captureAndRecordCompat('no_form_found', false, 100, { note: 'No login form detected on page' })
+                await this.captureAndRecordCompat('No login screen found', false, 100, { note: 'Could not find a login form on this page' })
                 // Continue to capture final state
             }
 
@@ -162,12 +162,12 @@ export class AuthFlowExecutor {
             }
 
             // STEP 2: Verify Inputs
-            await this.captureAndRecordCompat('detect_email_field', !!fields.emailSelector, 100, {
+            await this.captureAndRecordCompat('Finding email input', !!fields.emailSelector, 100, {
                 selector: fields.emailSelector || 'none'
             })
 
             // STEP 3: Detect Password Field
-            await this.captureAndRecordCompat('detect_password_field', !!fields.passwordSelector, 100, {
+            await this.captureAndRecordCompat('Finding password input', !!fields.passwordSelector, 100, {
                 selector: fields.passwordSelector || 'none'
             })
 
@@ -179,9 +179,9 @@ export class AuthFlowExecutor {
                     return btn ? (btn.disabled || btn.classList.contains('disabled')) : false
                 }, fields.submitSelector)
             }
-            await this.captureAndRecordCompat('check_submit_disabled', true, 100, {
+            await this.captureAndRecordCompat('Checking button state (Pre-input)', true, 100, {
                 disabled_before_input: isSubmitDisabled,
-                notes: isSubmitDisabled ? 'Button correctly disabled' : 'Button enabled (permissive)'
+                notes: isSubmitDisabled ? 'Button is correctly disabled' : 'Button is enabled (ready to click)'
             })
 
             // STEP 5: Inject Credentials
@@ -196,8 +196,8 @@ export class AuthFlowExecutor {
                 await page.fill(fields.passwordSelector, password)
                 await page.waitForTimeout(200)
             }
-            await this.captureAndRecordCompat('inject_credentials', true, 1000, {
-                email_masked: email.replace(/(.{3}).*(@.*)/, '$1***$2')
+            await this.captureAndRecordCompat('Entering credentials', true, 1000, {
+                email_entered: email.replace(/(.{3}).*(@.*)/, '$1***$2')
             })
 
             // STEP 6: Check Submit Enabled State (Post-Input)
@@ -209,9 +209,9 @@ export class AuthFlowExecutor {
                     return btn ? (!btn.disabled && !btn.classList.contains('disabled')) : true
                 }, fields.submitSelector) || true // Default to true if not found/unsure to proceed
             }
-            await this.captureAndRecordCompat('check_submit_enabled', isSubmitEnabled, 100, {
+            await this.captureAndRecordCompat('Checking button state (Post-input)', isSubmitEnabled, 100, {
                 enabled_after_input: isSubmitEnabled,
-                selector: fields.submitSelector
+                button_selector: fields.submitSelector
             })
 
             // STEP 7: Submit Form
@@ -220,44 +220,44 @@ export class AuthFlowExecutor {
                     page.waitForLoadState('networkidle').catch(() => { }), // Race condition helper
                     page.click(fields.submitSelector)
                 ])
-                await this.captureAndRecordCompat('submit_form', true, 1000, {})
+                await this.captureAndRecordCompat('Submitting login form', true, 1000, {})
             } else {
                 // Try Enter key if no button
                 await page.keyboard.press('Enter')
-                await this.captureAndRecordCompat('submit_form', true, 500, { method: 'Enter Key' })
+                await this.captureAndRecordCompat('Submitting via Enter key', true, 500, { method: 'Enter Key' })
             }
             await page.waitForTimeout(2000)
 
             // STEP 8: Detect MFA Requirement
             const mfaDetected = await this.detectMfa()
-            await this.captureAndRecordCompat('detect_mfa', !!mfaDetected, 500, {
+            await this.captureAndRecordCompat('Checking for MFA requirements', !!mfaDetected, 500, {
                 type: mfaDetected || 'none'
             })
 
             if (mfaDetected) {
                 const mfaResult = await this.handleMfa(mfaDetected)
                 if (!mfaResult.success) {
-                    await this.captureAndRecordCompat('mfa_not_completed', false, 0, { note: 'MFA was required but not completed' })
+                    await this.captureAndRecordCompat('MFA not completed', false, 0, { note: 'MFA was required but timed out or failed' })
                     // Continue to capture final state
                 }
             }
 
             // STEP 9: Verify Login Success
             const success = await this.evaluateSuccess()
-            await this.captureAndRecordCompat('verify_login_success', success, 500, {
-                result: success ? 'Logged In' : 'Login Failed',
-                url: page.url()
+            await this.captureAndRecordCompat('Verifying login success', success, 500, {
+                result: success ? 'Logged In Successfully' : 'Login Failed',
+                current_url: page.url()
             })
 
             // STEP 10: Capture Post-Login Snapshot
             await this.deps.captureScreenshot('login-final-state')
-            await this.captureAndRecordCompat('capture_snapshot', true, 500, { note: 'Final State' })
+            await this.captureAndRecordCompat('Saving final result', true, 500, { note: 'Final state captured' })
 
             return this.buildResult(success)
 
         } catch (error: any) {
             logger.error({ runId: this.config.runId, error: error.message }, 'Login Flow Failed')
-            this.deps.recordStep('auth_flow_error', false, 0, { error: error.message })
+            this.deps.recordStep('Login process error', false, 0, { error: error.message })
             return this.buildResult(true) // Always return success - errors are findings
         }
     }
@@ -551,8 +551,8 @@ export class AuthFlowExecutor {
 
             const success = isExternal && !isErrorPage
 
-            await this.captureAndRecordCompat('test_sso_initiation', success, 2000, {
-                sso_selector: ssoSelector,
+            await this.captureAndRecordCompat('Testing SSO button', success, 2000, {
+                button: ssoSelector,
                 redirected_to: currentUrl,
                 external_domain: isExternal,
                 error_detected: isErrorPage

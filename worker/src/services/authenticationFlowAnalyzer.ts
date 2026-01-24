@@ -127,7 +127,7 @@ export class AuthenticationFlowAnalyzer {
     stepNumber: number
   ): Promise<{ authMethods: AuthMethod[]; mfaDetected: boolean; ssoProviders: string[] }> {
     this.logEmitter = getExecutionLogEmitter(runId, stepNumber)
-    this.logEmitter.log('Starting authentication method detection', {})
+    this.logEmitter.log('Checking available login options', {})
 
     const authMethods: AuthMethod[] = []
     const ssoProviders: string[] = []
@@ -241,8 +241,8 @@ export class AuthenticationFlowAnalyzer {
       ssoProviders.push(...analysis.sso)
       mfaDetected = analysis.mfa
 
-      this.logEmitter.log(`Detected ${authMethods.length} authentication method(s)`, {
-        methods: authMethods.map(m => m.type),
+      this.logEmitter.log(`Found ${authMethods.length} login option(s)`, {
+        methods: authMethods.map(m => m.type === 'email_password' ? 'Email/Password' : m.type),
         ssoProviders,
         mfaDetected,
       })
@@ -267,7 +267,7 @@ export class AuthenticationFlowAnalyzer {
     const startUrl = page.url()
 
     try {
-      this.logEmitter.log(`Smoke testing SSO provider: ${provider}`, { selector: ssoSelector })
+      this.logEmitter.log(`Checking SSO button: ${provider}`, { selector: ssoSelector })
 
       // Click and wait for potential navigation
       await Promise.all([
@@ -289,7 +289,7 @@ export class AuthenticationFlowAnalyzer {
 
       const success = isExternal && !isErrorPage
 
-      this.logEmitter.log(`SSO Smoke Test (${provider}): ${success ? 'PASSED' : 'FAILED'}`, {
+      this.logEmitter.log(`SSO Check (${provider}): ${success ? 'Working' : 'Potential Issue'}`, {
         redirected_to: currentUrl,
         external: isExternal,
         error_page: isErrorPage
