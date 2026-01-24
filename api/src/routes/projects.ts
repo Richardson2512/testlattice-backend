@@ -77,51 +77,46 @@ export async function projectRoutes(fastify: FastifyInstance) {
         details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
       })
     }
-  }
   })
 
-// Update project (requires authentication)
-fastify.patch<{ Params: { projectId: string }; Body: { name?: string; description?: string } }>('/:projectId', {
-  preHandler: authenticate,
-}, async (request: AuthenticatedRequest, reply) => {
-  try {
-    const { projectId } = request.params as { projectId: string }
-    const updates = request.body as { name?: string; description?: string }
+  // Update project (requires authentication)
+  fastify.patch<{ Params: { projectId: string }; Body: { name?: string; description?: string } }>('/:projectId', {
+    preHandler: authenticate,
+  }, async (request: AuthenticatedRequest, reply) => {
+    try {
+      const { projectId } = request.params as { projectId: string }
+      const updates = request.body as { name?: string; description?: string }
 
-    const project = await Database.getProject(projectId)
-    if (!project) {
-      return reply.code(404).send({ error: 'Project not found' })
+      const project = await Database.getProject(projectId)
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' })
+      }
+
+      const updated = await Database.updateProject(projectId, updates)
+      return reply.send({ project: updated })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to update project' })
     }
+  })
 
-    // Check ownership (simple check for now, later team check)
-    // if (project.teamId !== request.user?.id && ...)
+  // Delete project (requires authentication)
+  fastify.delete<{ Params: { projectId: string } }>('/:projectId', {
+    preHandler: authenticate,
+  }, async (request: AuthenticatedRequest, reply) => {
+    try {
+      const { projectId } = request.params as { projectId: string }
 
-    const updated = await Database.updateProject(projectId, updates)
-    return reply.send({ project: updated })
-  } catch (error: any) {
-    fastify.log.error(error)
-    return reply.code(500).send({ error: error.message || 'Failed to update project' })
-  }
-})
+      const project = await Database.getProject(projectId)
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' })
+      }
 
-// Delete project (requires authentication)
-fastify.delete<{ Params: { projectId: string } }>('/:projectId', {
-  preHandler: authenticate,
-}, async (request: AuthenticatedRequest, reply) => {
-  try {
-    const { projectId } = request.params as { projectId: string }
-
-    const project = await Database.getProject(projectId)
-    if (!project) {
-      return reply.code(404).send({ error: 'Project not found' })
+      await Database.deleteProject(projectId)
+      return reply.send({ success: true, message: 'Project deleted' })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to delete project' })
     }
-
-    await Database.deleteProject(projectId)
-    return reply.send({ success: true, message: 'Project deleted' })
-  } catch (error: any) {
-    fastify.log.error(error)
-    return reply.code(500).send({ error: error.message || 'Failed to delete project' })
-  }
-})
+  })
 }
-
