@@ -665,13 +665,76 @@ try {
   logger.warn('⚠️  Guest tests will not be processed')
 }
 
+// Helper to safely update status via API with retries
+async function safeUpdateStatus(
+  jobId: string | undefined,
+  runId: string,
+  status: 'completed' | 'failed',
+  error?: string,
+  summary?: any
+) {
+  if (!runId) return
+
+  const apiUrl = process.env.API_URL || config.api.url || 'http://localhost:3001'
+  const maxRetries = 3
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const fetch = (await import('node-fetch')).default
+
+      // First check current status to avoid overwriting 'completed' with 'failed' race conditions
+      // or unnecessary updates if already correct
+      try {
+        const checkRes = await fetch(`${apiUrl}/api/tests/${runId}/status`)
+        if (checkRes.ok) {
+          const data = await checkRes.json()
+          const currentStatus = data.testRun?.status
+          // If already in a terminal state, don't overwrite unless it's to provide error details for a 'failed' state
+          if ((currentStatus === 'completed' || currentStatus === 'failed' || currentStatus === 'cancelled') && !error) {
+            logger.info({ runId, currentStatus }, 'ℹ️ Skipping status update - run already in terminal state')
+            return
+          }
+        }
+      } catch (e) {
+        // Ignore check errors, proceed to update
+      }
+
+      await fetch(`${apiUrl}/api/tests/${runId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: status === 'failed' ? 'failed' : 'completed', // Map to valid enum values
+          error,
+          summary,
+          completedAt: new Date().toISOString()
+        })
+      })
+
+      logger.info({ runId, status, attempt: i + 1 }, '✅ Safety Net: Status synced to DB')
+      return // Success
+    } catch (err: any) {
+      logger.warn({ runId, err: err.message, attempt: i + 1 }, '⚠️ Safety Net: Failed to sync status')
+      if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (i + 1)))
+    }
+  }
+  logger.error({ runId }, '❌ Safety Net: Could not sync status after retries')
+}
+
 // Main worker event handlers
-worker.on('completed', (job: any) => {
+worker.on('completed', async (job: any) => {
   logger.info({ jobId: job.id }, '✓ Main job completed successfully')
+  // Safety net: Ensure DB is marked completed
+  if (job?.data?.runId) {
+    await safeUpdateStatus(job.id, job.data.runId, 'completed', undefined, job.returnvalue?.reportSummary)
+  }
 })
 
-worker.on('failed', (job: any, err: Error) => {
+worker.on('failed', async (job: any, err: Error) => {
   logger.error({ jobId: job?.id, err: err?.message }, '✗ Main job failed')
+  // Safety net: Ensure DB is marked failed
+  if (job?.data?.runId) {
+    await safeUpdateStatus(job.id, job.data.runId, 'failed', err?.message || 'Job failed in queue')
+  }
 })
 
 worker.on('active', (job: any) => {
@@ -680,12 +743,20 @@ worker.on('active', (job: any) => {
 
 // Guest worker event handlers
 if (guestWorker) {
-  guestWorker.on('completed', (job: any) => {
+  guestWorker.on('completed', async (job: any) => {
     logger.info({ jobId: job.id }, '✓ Guest job completed successfully')
+    // Safety net
+    if (job?.data?.runId) {
+      await safeUpdateStatus(job.id, job.data.runId, 'completed', undefined, job.returnvalue?.reportSummary)
+    }
   })
 
-  guestWorker.on('failed', (job: any, err: Error) => {
+  guestWorker.on('failed', async (job: any, err: Error) => {
     logger.error({ jobId: job?.id, err: err?.message }, '✗ Guest job failed')
+    // Safety net
+    if (job?.data?.runId) {
+      await safeUpdateStatus(job.id, job.data.runId, 'failed', err?.message || 'Guest job failed in queue')
+    }
   })
 
   guestWorker.on('active', (job: any) => {

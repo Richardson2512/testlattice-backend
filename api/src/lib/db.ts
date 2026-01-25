@@ -204,7 +204,12 @@ export class Database {
     return data ? this.mapProjectFromDb(data) : null
   }
 
-  static async listProjects(teamId?: string): Promise<Project[]> {
+  static async listProjects(teamId?: string, userId?: string): Promise<Project[]> {
+    // SECURITY: Fail closed if no filter is provided to prevent leaking all projects
+    if (!teamId && !userId) {
+      return []
+    }
+
     let query = supabase
       .from('projects')
       .select('*')
@@ -212,6 +217,10 @@ export class Database {
 
     if (teamId) {
       query = query.eq('team_id', teamId)
+    } else if (userId) {
+      // If only userId is provided, return projects owned by user or their personal team
+      // Note: This assumes simple team setup where user ID might be used as team ID
+      query = query.or(`user_id.eq.${userId},team_id.eq.${userId}`)
     }
 
     const { data, error } = await query
@@ -452,8 +461,8 @@ export class Database {
         return
       }
 
-      // Check if default project exists
-      const projects = await this.listProjects()
+      // Check if default project exists (using specific team_default to avoid empty list due to security fix)
+      const projects = await this.listProjects('team_default')
       if (projects.length === 0) {
         const defaultProject = await this.createProject({
           name: 'Sample Project',

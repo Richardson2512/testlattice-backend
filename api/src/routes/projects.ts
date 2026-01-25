@@ -10,7 +10,10 @@ export async function projectRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest, reply) => {
     try {
       const { teamId } = request.query as { teamId?: string }
-      const projects = await Database.listProjects(teamId)
+      const userId = request.user?.id
+
+      // Pass userId to enforce filtering if teamId is not provided (or in addition to it)
+      const projects = await Database.listProjects(teamId, userId)
 
       return reply.send({ projects })
     } catch (error: any) {
