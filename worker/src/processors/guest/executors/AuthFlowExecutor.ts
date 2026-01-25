@@ -606,107 +606,106 @@ export class AuthFlowExecutor {
             }
         }
     }
-}
 
     /**
      * Test submitting with blank inputs
      */
-    private async testBlankSubmission(submitSelector: string): Promise < void> {
-    const page = this.deps.page
+    private async testBlankSubmission(submitSelector: string): Promise<void> {
+        const page = this.deps.page
         try {
-        await page.click(submitSelector)
+            await page.click(submitSelector)
             await page.waitForTimeout(500)
 
             // Check for HTML5 validation or visible text
             const validationMessage = await page.evaluate(() => {
-            const invalidInput = document.querySelector('input:invalid') as HTMLInputElement
-            if (invalidInput) return invalidInput.validationMessage
+                const invalidInput = document.querySelector('input:invalid') as HTMLInputElement
+                if (invalidInput) return invalidInput.validationMessage
 
-            const bodyText = document.body.innerText.toLowerCase()
-            if (bodyText.includes('required') || bodyText.includes('enter your') || bodyText.includes('cannot be empty')) return 'Text validation found'
+                const bodyText = document.body.innerText.toLowerCase()
+                if (bodyText.includes('required') || bodyText.includes('enter your') || bodyText.includes('cannot be empty')) return 'Text validation found'
 
-            return null
-        })
+                return null
+            })
 
             await this.captureAndRecordCompat('test_blank_submission', !!validationMessage, 500, {
-            error_detected: !!validationMessage,
-            message: validationMessage || 'No validation error detected on blank submit'
-        })
-    } catch(e: any) {
-        await this.captureAndRecordCompat('test_blank_submission', false, 0, { error: e.message })
+                error_detected: !!validationMessage,
+                message: validationMessage || 'No validation error detected on blank submit'
+            })
+        } catch (e: any) {
+            await this.captureAndRecordCompat('test_blank_submission', false, 0, { error: e.message })
+        }
     }
-}
 
     /**
      * Test submitting with invalid credentials
      */
-    private async testInvalidCredentials(emailSel: string, passSel: string, submitSel: string): Promise < void> {
-    const page = this.deps.page
+    private async testInvalidCredentials(emailSel: string, passSel: string, submitSel: string): Promise<void> {
+        const page = this.deps.page
         try {
-        await page.fill(emailSel, 'invalid-test-user@example.com')
+            await page.fill(emailSel, 'invalid-test-user@example.com')
             await page.fill(passSel, 'WrongPassword123!')
             await page.click(submitSel)
 
             // Wait for error
             await page.waitForTimeout(1000)
-            
+
             const hasError = await page.evaluate(() => {
-            const text = document.body.innerText.toLowerCase()
-            return text.includes('invalid') || text.includes('incorrect') || text.includes('failed') || text.includes('not found') || text.includes('error')
-        })
+                const text = document.body.innerText.toLowerCase()
+                return text.includes('invalid') || text.includes('incorrect') || text.includes('failed') || text.includes('not found') || text.includes('error')
+            })
 
             await this.captureAndRecordCompat('test_invalid_credentials', hasError, 1000, {
-            error_feedback_detected: hasError,
-            note: hasError ? 'System correctly flagged invalid credentials' : 'Warning: No obvious error message for invalid credentials'
-        })
+                error_feedback_detected: hasError,
+                note: hasError ? 'System correctly flagged invalid credentials' : 'Warning: No obvious error message for invalid credentials'
+            })
 
             // Clear inputs
             await page.fill(emailSel, '')
             await page.fill(passSel, '')
-    } catch(e: any) {
-        await this.captureAndRecordCompat('test_invalid_credentials', false, 0, { error: e.message })
-        // Try to clear anyway
-        try { await page.fill(emailSel, ''); await page.fill(passSel, ''); } catch { }
+        } catch (e: any) {
+            await this.captureAndRecordCompat('test_invalid_credentials', false, 0, { error: e.message })
+            // Try to clear anyway
+            try { await page.fill(emailSel, ''); await page.fill(passSel, ''); } catch { }
+        }
     }
-}
 
-    private async detectMfa(): Promise < 'otp' | 'magic_link' | null > {
-    const page = this.deps.page
+    private async detectMfa(): Promise<'otp' | 'magic_link' | null> {
+        const page = this.deps.page
 
         // OTP indicators
         const otpIndicators = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase()
-        return (
-            text.includes('verification code') ||
-            text.includes('enter code') ||
-            text.includes('enter otp') ||
-            text.includes('6-digit') ||
-            document.querySelector('input[maxlength="6"]') !== null ||
-            document.querySelector('input[inputmode="numeric"]') !== null
-        )
-    })
+            const text = document.body.innerText.toLowerCase()
+            return (
+                text.includes('verification code') ||
+                text.includes('enter code') ||
+                text.includes('enter otp') ||
+                text.includes('6-digit') ||
+                document.querySelector('input[maxlength="6"]') !== null ||
+                document.querySelector('input[inputmode="numeric"]') !== null
+            )
+        })
 
-        if(otpIndicators) return 'otp'
+        if (otpIndicators) return 'otp'
 
         // Magic link indicators
         const magicLinkIndicators = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase()
-        return (
-            text.includes('check your email') ||
-            text.includes('verification link') ||
-            text.includes('magic link') ||
-            text.includes('we sent') ||
-            text.includes('email sent')
-        )
-    })
+            const text = document.body.innerText.toLowerCase()
+            return (
+                text.includes('check your email') ||
+                text.includes('verification link') ||
+                text.includes('magic link') ||
+                text.includes('we sent') ||
+                text.includes('email sent')
+            )
+        })
 
-        if(magicLinkIndicators) return 'magic_link'
+        if (magicLinkIndicators) return 'magic_link'
 
         return null
-}
+    }
 
-    private async handleMfa(type: 'otp' | 'magic_link'): Promise < MfaResult > {
-    this.deps.logEmitter.log(`MFA detected: ${type}. Waiting for user input...`)
+    private async handleMfa(type: 'otp' | 'magic_link'): Promise<MfaResult> {
+        this.deps.logEmitter.log(`MFA detected: ${type}. Waiting for user input...`)
 
         // Explicitly record step so frontend knows we are waiting
         await this.captureAndRecordCompat('waiting_for_mfa', true, 0, { type, description: 'Waiting for Human Input...' })
@@ -714,90 +713,90 @@ export class AuthFlowExecutor {
         // Trigger wrapper handler
         const result = await this.mfaHandler.waitForInput(type, 120000)
 
-        if(result.success && result.value) {
-    if (type === 'otp') {
-        await this.enterOtp(result.value)
-    } else {
-        await this.deps.page.goto(result.value)
-        await this.deps.page.waitForLoadState('networkidle')
-    }
-    await this.captureAndRecordCompat('mfa_complete', true, 0, { type })
-} else {
-    await this.captureAndRecordCompat('mfa_failed', false, 0, { type, reason: result.error })
-}
-
-return result
-    }
-
-    private async enterOtp(otp: string): Promise < void> {
-    await this.deps.page.evaluate((otpCode: string) => {
-        const inputs = document.querySelectorAll<HTMLInputElement>(
-            'input[type="text"][maxlength="1"], input[type="text"][maxlength="6"], input[inputmode="numeric"]'
-        )
-
-        if (inputs.length === 1 || (inputs[0]?.maxLength || 0) > 1) {
-            if (inputs[0]) {
-                inputs[0].value = otpCode
-                inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+        if (result.success && result.value) {
+            if (type === 'otp') {
+                await this.enterOtp(result.value)
+            } else {
+                await this.deps.page.goto(result.value)
+                await this.deps.page.waitForLoadState('networkidle')
             }
+            await this.captureAndRecordCompat('mfa_complete', true, 0, { type })
         } else {
-            for (let i = 0; i < Math.min(otpCode.length, inputs.length); i++) {
-                inputs[i].value = otpCode[i]
-                inputs[i].dispatchEvent(new Event('input', { bubbles: true }))
-            }
+            await this.captureAndRecordCompat('mfa_failed', false, 0, { type, reason: result.error })
         }
-    }, otp)
+
+        return result
+    }
+
+    private async enterOtp(otp: string): Promise<void> {
+        await this.deps.page.evaluate((otpCode: string) => {
+            const inputs = document.querySelectorAll<HTMLInputElement>(
+                'input[type="text"][maxlength="1"], input[type="text"][maxlength="6"], input[inputmode="numeric"]'
+            )
+
+            if (inputs.length === 1 || (inputs[0]?.maxLength || 0) > 1) {
+                if (inputs[0]) {
+                    inputs[0].value = otpCode
+                    inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+                }
+            } else {
+                for (let i = 0; i < Math.min(otpCode.length, inputs.length); i++) {
+                    inputs[i].value = otpCode[i]
+                    inputs[i].dispatchEvent(new Event('input', { bubbles: true }))
+                }
+            }
+        }, otp)
 
         await this.deps.page.waitForTimeout(500)
 
         // Try to click submit
         const submitBtn = await this.deps.page.$('button[type="submit"], button:has-text("Verify")')
-        if(submitBtn) {
-        await submitBtn.click()
-        await this.deps.page.waitForTimeout(2000)
+        if (submitBtn) {
+            await submitBtn.click()
+            await this.deps.page.waitForTimeout(2000)
+        }
     }
-}
 
-    private async evaluateSuccess(): Promise < boolean > {
-    const page = this.deps.page
+    private async evaluateSuccess(): Promise<boolean> {
+        const page = this.deps.page
 
         // ✅ Option A: Use Playwright locators for text matching (Safe & Correct)
         // This avoids the SyntaxError caused by passing :has-text to document.querySelector
         const hasLogout = await page.locator(
-        '[aria-label*="logout" i], button:has-text("Logout"), a:has-text("Sign out"), button:has-text("Sign out")'
-    ).first().isVisible().catch(() => false)
+            '[aria-label*="logout" i], button:has-text("Logout"), a:has-text("Sign out"), button:has-text("Sign out")'
+        ).first().isVisible().catch(() => false)
 
         // Check for other indicators using standard DOM API
         const indicators = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase()
-        const url = window.location.href.toLowerCase()
+            const text = document.body.innerText.toLowerCase()
+            const url = window.location.href.toLowerCase()
 
-        return {
-            hasDashboard: url.includes('dashboard') || text.includes('welcome'),
-            hasProfile: document.querySelector('[aria-label*="profile" i], [aria-label*="account" i]') !== null,
-            noError: !text.includes('invalid') && !text.includes('incorrect') && !text.includes('wrong password')
-        }
-    })
+            return {
+                hasDashboard: url.includes('dashboard') || text.includes('welcome'),
+                hasProfile: document.querySelector('[aria-label*="profile" i], [aria-label*="account" i]') !== null,
+                noError: !text.includes('invalid') && !text.includes('incorrect') && !text.includes('wrong password')
+            }
+        })
 
-        return(
-        indicators.hasDashboard ||
+        return (
+            indicators.hasDashboard ||
             hasLogout ||
             indicators.hasProfile
         ) && indicators.noError
     }
 
     private generateTestEmail(): string {
-    const timestamp = Date.now()
-    return `testlattice+${timestamp}@test.com`
-}
+        const timestamp = Date.now()
+        return `testlattice+${timestamp}@test.com`
+    }
 
     private buildResult(success: boolean): ProcessResult {
-    return {
-        success: true, // Always return success - findings at step level
-        steps: this.steps,
-        artifacts: this.artifacts,
-        stage: 'execution'
+        return {
+            success: true, // Always return success - findings at step level
+            steps: this.steps,
+            artifacts: this.artifacts,
+            stage: 'execution'
+        }
     }
-}
 }
 
