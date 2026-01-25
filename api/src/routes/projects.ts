@@ -37,7 +37,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'Invalid project ID format' })
       }
 
-      const project = await Database.getProject(projectId)
+      // Enforce ownership: Pass request.user.id
+      const project = await Database.getProject(projectId, request.user?.id)
 
       if (!project) {
         return reply.code(404).send({ error: 'Project not found' })
@@ -63,6 +64,7 @@ export async function projectRoutes(fastify: FastifyInstance) {
 
       fastify.log.info({ name, teamId, userId: request.user?.id }, 'Creating project')
 
+      // Pass request.user.id as owner
       const project = await Database.createProject({
         name,
         description,
@@ -105,7 +107,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
 
       const updates = request.body as { name?: string; description?: string }
 
-      const project = await Database.getProject(projectId)
+      // Enforce ownership: Pass request.user.id
+      const project = await Database.getProject(projectId, request.user?.id)
       if (!project) {
         return reply.code(404).send({ error: 'Project not found' })
       }
@@ -130,7 +133,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'Invalid project ID format' })
       }
 
-      const project = await Database.getProject(projectId)
+      // Enforce ownership: Pass request.user.id
+      const project = await Database.getProject(projectId, request.user?.id)
       if (!project) {
         return reply.code(404).send({ error: 'Project not found' })
       }
