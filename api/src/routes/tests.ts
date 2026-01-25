@@ -21,6 +21,60 @@ export async function testRoutes(fastify: FastifyInstance) {
   }
   // Create a new test run (requires authentication)
   // INVARIANT: Free users behave like guests with persistence and limits; paid users unlock composition and control.
+  // Associate guest tests with user
+  fastify.post<{ Body: { guestSessionId: string } }>('/associate', {
+    preHandler: authenticate,
+  }, async (request: AuthenticatedRequest, reply: any) => {
+    try {
+      const { guestSessionId } = request.body as { guestSessionId: string }
+      const userId = request.user!.id
+
+      if (!guestSessionId) {
+        return reply.code(400).send({ error: 'Guest session ID is required' })
+      }
+
+      const { supabase } = await import('../lib/supabase')
+
+      // Find all guest tests
+      const { data: tests, error: fetchError } = await supabase
+        .from('test_runs')
+        .select('id, user_id')
+        .eq('guest_session_id', guestSessionId)
+        .is('user_id', null) // Only claim unowned tests
+
+      if (fetchError) {
+        throw fetchError
+      }
+
+      if (!tests || tests.length === 0) {
+        return reply.send({ success: true, count: 0, message: 'No eligible guest tests found' })
+      }
+
+      // Associate them with the user
+      const { error: updateError } = await supabase
+        .from('test_runs')
+        .update({ user_id: userId })
+        .in('id', tests.map(t => t.id))
+
+      if (updateError) {
+        throw updateError
+      }
+
+      // Also trigger usage increment for each claimed test to respect quotas?
+      // Policy: We won't retroactively fail them, but we should count them if they happened this month.
+      // For simplicity in this iteration, we just claim ownership. usage triggers on creation.
+
+      return reply.send({
+        success: true,
+        count: tests.length,
+        message: `Successfully associated ${tests.length} tests with your account`
+      })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to associate guest tests' })
+    }
+  })
+
   fastify.post<{ Body: CreateTestRunRequest }>('/run', {
     preHandler: authenticate,
   }, async (request: AuthenticatedRequest, reply: any) => {
@@ -109,8 +163,29 @@ export async function testRoutes(fastify: FastifyInstance) {
         })
       }
 
+      let targetProjectId = projectId
+
+      // Handle missing projectId for Free/Default flow
+      if (!targetProjectId) {
+        const userProjects = await Database.listProjects(undefined, request.user!.id)
+        const defaultProjectName = 'My Tests'
+
+        const existingDefault = userProjects.find(p => p.name === defaultProjectName)
+        if (existingDefault) {
+          targetProjectId = existingDefault.id
+        } else {
+          // Create default project (bypassing API limits as this is system-initiated)
+          const newProject = await Database.createProject({
+            name: defaultProjectName,
+            description: 'Default project for your tests',
+            teamId: request.user!.id // Using user ID as team ID for simplicity in personal workspace
+          }, request.user!.id)
+          targetProjectId = newProject.id
+        }
+      }
+
       // Validate project exists AND user owns it
-      const project = await Database.getProject(projectId, request.user?.id)
+      const project = await Database.getProject(targetProjectId, request.user?.id)
       if (!project) {
         return reply.code(404).send({ error: 'Project not found (or you do not have access)' })
       }
@@ -118,7 +193,7 @@ export async function testRoutes(fastify: FastifyInstance) {
 
       // Create test run record (associate with authenticated user)
       const testRun = await Database.createTestRun({
-        projectId,
+        projectId: targetProjectId,
         build,
         profile,
         options: normalizedOptions,
@@ -129,7 +204,7 @@ export async function testRoutes(fastify: FastifyInstance) {
       try {
         await enqueueTestRun({
           runId: testRun.id,
-          projectId,
+          projectId: targetProjectId,
           build,
           profile,
           options: normalizedOptions,
@@ -415,6 +490,37 @@ export async function testRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       fastify.log.error(error)
       return reply.code(500).send({ error: error.message || 'Failed to cleanup stale tests' })
+    }
+  })
+
+  // Move test to project (Tier feature)
+  fastify.post<{ Params: { runId: string }; Body: { projectId: string } }>('/:runId/move', {
+    preHandler: authenticate,
+  }, async (request: AuthenticatedRequest, reply: any) => {
+    try {
+      const { runId } = request.params as { runId: string }
+      const { projectId } = request.body as { projectId: string }
+      const userId = request.user!.id
+
+      // 1. Validate Target Project
+      const project = await Database.getProject(projectId, userId)
+      if (!project) {
+        return reply.code(404).send({ error: 'Target project not found' })
+      }
+
+      // 2. Validate Test Ownership
+      const testRun = await Database.getTestRun(runId, userId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found or access denied' })
+      }
+
+      // 3. Update
+      const updated = await Database.updateTestRun(runId, { projectId })
+
+      return reply.send({ success: true, testRun: updated })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to move test' })
     }
   })
 

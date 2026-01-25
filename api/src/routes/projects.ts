@@ -2,6 +2,7 @@
 import { FastifyInstance } from 'fastify'
 import { Database } from '../lib/db'
 import { authenticate, AuthenticatedRequest } from '../middleware/auth'
+import { getUserTier, TIER_LIMITS } from '../lib/tierSystem'
 
 // UUID validation regex
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -57,9 +58,40 @@ export async function projectRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest, reply) => {
     try {
       const { name, description, teamId } = request.body as { name: string; description?: string; teamId: string }
+      const userId = request.user?.id
 
       if (!name || !teamId) {
         return reply.code(400).send({ error: 'Name and teamId are required' })
+      }
+
+      // Enforce Project Creation Limits
+      if (userId) {
+        const tier = await getUserTier(userId)
+        const limits = TIER_LIMITS[tier]
+        const maxProjects = limits.maxProjects
+
+        // If limit is finite (0 or specific number), check count
+        if (maxProjects !== Infinity) {
+          const userProjects = await Database.listProjects(undefined, userId)
+          // Note: listProjects returns projects owned by user OR in their team. 
+          // Stricter check: Count only projects owned by user if we want owner-based limits?
+          // User said: "starter tier gets 1 project"
+          // We'll count all accessible projects for now to be safe/strict as per "Enforce" request.
+          // Or filtering by ownership might be fairer if they are invited to other teams.
+          // Given "Free users... 0 projects", checking total access prevents loopholes.
+
+          if (userProjects.length >= maxProjects) {
+            const message = maxProjects === 0
+              ? `Your current plan (${tier}) does not support creating projects. Please upgrade.`
+              : `You have reached the maximum of ${maxProjects} project(s) allowed on the ${tier} plan.`
+            return reply.code(403).send({
+              error: message,
+              tier,
+              limit: maxProjects,
+              current: userProjects.length
+            })
+          }
+        }
       }
 
       fastify.log.info({ name, teamId, userId: request.user?.id }, 'Creating project')

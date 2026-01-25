@@ -56,7 +56,7 @@ async function getGuestTier(guestSessionId: string): Promise<'tier1' | 'tier2'> 
   try {
     // Check if user has completed any tests in the last 7 days
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-    
+
     // Query for completed tests
     const { supabase } = await import('./supabase')
     const { count, error } = await supabase
@@ -65,12 +65,12 @@ async function getGuestTier(guestSessionId: string): Promise<'tier1' | 'tier2'> 
       .eq('guest_session_id', guestSessionId)
       .gte('created_at', sevenDaysAgo)
       .in('status', ['completed', 'failed'])
-    
+
     if (error) {
       console.error('Failed to get guest tier:', error)
       return 'tier1' // Default to tier1 on error
     }
-    
+
     // If they have previous tests, they're tier2 (returning user)
     return (count || 0) > 0 ? 'tier2' : 'tier1'
   } catch (error) {
@@ -82,27 +82,56 @@ async function getGuestTier(guestSessionId: string): Promise<'tier1' | 'tier2'> 
 /**
  * Check rate limits for guest test
  */
+/**
+ * Check rate limits for guest test
+ */
 export async function checkGuestRateLimit(
   guestSessionId: string,
+  ipAddress?: string,
   config: RateLimitConfig = DEFAULT_RATE_LIMITS
 ): Promise<RateLimitResult> {
   try {
+    const { supabase } = await import('./supabase')
+
+    // 1. IP-BASED CHECK (Strict 30-day limit)
+    // Rule: Guests limited to 3 tests per 30 days per IP
+    if (ipAddress) {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+      const { count: ipCount, error: ipError } = await supabase
+        .from('test_runs')
+        .select('*', { count: 'exact', head: true })
+        // We look for tests where we stored this IP in metadata
+        // Note: We need to ensure we start storing IP in metadata
+        .contains('options', { guestIp: ipAddress })
+        .gte('created_at', thirtyDaysAgo)
+
+      if (!ipError && (ipCount || 0) >= 3) {
+        return {
+          allowed: false,
+          reason: `Strict Limit: You have reached the limit of 3 tests per 30 days. Please sign up to continue.`,
+          retryAfter: 30 * 24 * 60 * 60, // Rough estimate
+          tier: 'tier1',
+          testsRemaining: 0,
+        }
+      }
+    }
+
     // Determine tier
     const tier = await getGuestTier(guestSessionId)
     const tierConfig = config[tier]
-    
+
     // Check tier-specific limits
     const now = Date.now()
     const windowStart = now - (tierConfig.window * 1000)
     const cooldownWindow = now - (tierConfig.cooldown * 1000)
-    
+
     // Get test count in window
     const testCount = await Database.getGuestTestCount(guestSessionId, tierConfig.window * 1000)
-    
+
     // Check if exceeded tier limit
     if (testCount >= tierConfig.tests) {
       // Find oldest test in window to calculate retry time
-      const { supabase } = await import('./supabase')
       const { data: oldestTest, error: oldestTestError } = await supabase
         .from('test_runs')
         .select('created_at')
@@ -111,15 +140,15 @@ export async function checkGuestRateLimit(
         .order('created_at', { ascending: true })
         .limit(1)
         .maybeSingle()
-      
+
       if (oldestTestError && oldestTestError.code !== 'PGRST116') {
         console.error('Error finding oldest test:', oldestTestError)
       }
-      
+
       if (oldestTest) {
         const oldestTestTime = new Date(oldestTest.created_at).getTime()
         const retryAfter = Math.ceil((oldestTestTime + (tierConfig.window * 1000) - now) / 1000)
-        
+
         return {
           allowed: false,
           reason: `You've reached the limit of ${tierConfig.tests} tests per 24 hours. Please try again in ${formatTime(retryAfter)}.`,
@@ -138,9 +167,8 @@ export async function checkGuestRateLimit(
         }
       }
     }
-    
+
     // Check cooldown (time since last test)
-    const { supabase } = await import('./supabase')
     const { data: lastTest } = await supabase
       .from('test_runs')
       .select('created_at')
@@ -149,14 +177,14 @@ export async function checkGuestRateLimit(
       .order('created_at', { ascending: false })
       .limit(1)
       .single()
-    
+
     if (lastTest) {
       const lastTestTime = new Date(lastTest.created_at).getTime()
       const timeSinceLastTest = (now - lastTestTime) / 1000
-      
+
       if (timeSinceLastTest < tierConfig.cooldown) {
         const retryAfter = Math.ceil(tierConfig.cooldown - timeSinceLastTest)
-        
+
         return {
           allowed: false,
           reason: `Please wait ${formatTime(retryAfter)} before starting another test.`,
@@ -166,11 +194,7 @@ export async function checkGuestRateLimit(
         }
       }
     }
-    
-    // Check global rate limit (simplified - in production, use Redis)
-    // For now, we'll skip this check as it requires distributed rate limiting
-    // In production, implement with Redis INCR with TTL
-    
+
     return {
       allowed: true,
       tier,

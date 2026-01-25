@@ -43,12 +43,16 @@ export async function guestTestRunRoutes(fastify: FastifyInstance) {
         setGuestSessionCookie(reply, guestSessionId)
       }
 
-      // Progressive rate limiting
-      const rateLimitResult = await checkGuestRateLimit(guestSessionId)
+      // Capture IP Address for strict rate limiting
+      const ipAddress = request.ip || request.headers['x-forwarded-for'] as string || 'unknown'
+
+      // Progressive rate limiting (IP-based + Session-based)
+      const rateLimitResult = await checkGuestRateLimit(guestSessionId, ipAddress)
       if (!rateLimitResult.allowed) {
         // Track rate limit hit
         trackEvent('guest_rate_limit_exceeded', {
           sessionId: guestSessionId,
+          ip: ipAddress,
           tier: rateLimitResult.tier,
           retryAfter: rateLimitResult.retryAfter,
         }, request.user?.id, guestSessionId)
@@ -114,6 +118,7 @@ export async function guestTestRunRoutes(fastify: FastifyInstance) {
         guestTestType: effectiveTestType, // Pass test type to worker
         guestCredentials: credentials, // Pass credentials to worker
         userTier: guestTier, // Pass tier to worker
+        guestIp: ipAddress, // Store IP for future rate limiting checks
       })
 
       // Enforce Chrome only for guests

@@ -10,6 +10,7 @@ export interface TierLimits {
   maxPages: number
   maxScreenshots: number
   maxDuration: number // in minutes
+  maxProjects: number // Maximum number of projects allowed
 
   // Browser support
   browsers: Array<'chromium' | 'firefox' | 'webkit'>
@@ -50,6 +51,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxPages: 1,
     maxScreenshots: Infinity, // Changed from 5 to Infinity (unlimited, based on steps)
     maxDuration: 5,
+    maxProjects: 0,
     browsers: ['chromium'],
     mobileBrowsers: false,
     maxParallelBrowsers: 1, // Guest: chromium only
@@ -77,6 +79,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxPages: 1,
     maxScreenshots: Infinity,
     maxDuration: 5,
+    maxProjects: 0,
     browsers: ['chromium'],
     mobileBrowsers: false,
     maxParallelBrowsers: 1,
@@ -102,6 +105,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxPages: 1,
     maxScreenshots: Infinity, // Changed from 15 to Infinity (based on diagnosis report)
     maxDuration: 10,
+    maxProjects: 1,
     browsers: ['chromium', 'webkit'],
     mobileBrowsers: false,
     maxParallelBrowsers: 1, // Starter: single browser only
@@ -128,6 +132,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxPages: 3,
     maxScreenshots: Infinity, // Changed from 30 to Infinity (based on diagnosis report)
     maxDuration: 15,
+    maxProjects: Infinity,
     browsers: ['chromium', 'webkit', 'firefox'],
     mobileBrowsers: true,
     maxParallelBrowsers: 2, // Indie: up to 2 browsers in parallel (user selectable)
@@ -154,6 +159,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxPages: 10,
     maxScreenshots: Infinity, // Changed from 50 to Infinity (based on diagnosis report)
     maxDuration: 30,
+    maxProjects: Infinity,
     browsers: ['chromium', 'webkit', 'firefox'],
     mobileBrowsers: true,
     maxParallelBrowsers: 3, // Pro: all 3 browsers in parallel
@@ -179,6 +185,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
     maxPages: Infinity,
     maxScreenshots: Infinity,
     maxDuration: 60,
+    maxProjects: Infinity,
     browsers: ['chromium', 'webkit', 'firefox'],
     mobileBrowsers: true,
     maxParallelBrowsers: 3, // Agency: all 3 browsers in parallel

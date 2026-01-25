@@ -51,6 +51,7 @@ import { fixPromptRoutes } from './routes/fixPrompts'
 import { adminRoutes } from './routes/admin'
 import { behaviorRoutes } from './routes/behavior'
 import { credentialRoutes } from './routes/credentials'
+import { tierInfoRoutes } from './routes/shared/tierInfo'
 import { TestControlWebSocket } from './lib/websocket'
 import { RedisWebSocketManager } from './lib/websocketRedis'
 import { startCleanupScheduler } from './jobs/cleanupArtifacts'
@@ -241,6 +242,9 @@ async function registerRoutes() {
 
     // Credentials routes
     await fastify.register(credentialRoutes, { prefix: '/api/credentials' })
+
+    // Tier Info routes
+    await fastify.register(tierInfoRoutes, { prefix: '/api' })
   }, { prefix: '' })
 
   // Set up Sentry error handler (must be after all routes)
