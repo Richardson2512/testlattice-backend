@@ -94,12 +94,12 @@ function buildGoalsFromTestTypes(
             case 'login':
                 const loginUsername = credentials?.username || credentials?.email || 'demo@example.com'
                 const loginPassword = credentials?.password || 'DemoPass123!'
-                testGoals.push(`LOGIN: Test authentication flow. Find login form, test validation (empty fields, invalid credentials), then try valid credentials (${loginUsername}/${loginPassword}).`)
+                testGoals.push(`LOGIN: Test authentication flow. 1) Check for 'Forgot Password' link. 2) Test validation (submit blank, invalid credentials). 3) Login with valid credentials (${loginUsername}/${loginPassword}).`)
                 break
             case 'signup':
                 const signupUsername = credentials?.username || credentials?.email || 'demo@example.com'
                 const signupPassword = credentials?.password || 'DemoPass123!'
-                testGoals.push(`SIGNUP: Test registration flow. Find signup form, test field validation, check password requirements, submit with test data (${signupUsername}/${signupPassword}).`)
+                testGoals.push(`SIGNUP: Test registration flow. 1) Test validation (submit blank, check password requirements). 2) Submit with test data (${signupUsername}/${signupPassword}).`)
                 break
             case 'navigation':
                 testGoals.push('NAVIGATION: Click navigation links, test menu items, verify page transitions, check for broken links or 404 errors.')
