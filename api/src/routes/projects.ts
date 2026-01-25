@@ -3,6 +3,9 @@ import { FastifyInstance } from 'fastify'
 import { Database } from '../lib/db'
 import { authenticate, AuthenticatedRequest } from '../middleware/auth'
 
+// UUID validation regex
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function projectRoutes(fastify: FastifyInstance) {
   // List projects (requires authentication)
   fastify.get<{ Querystring: { teamId?: string } }>('/', {
@@ -28,6 +31,12 @@ export async function projectRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest, reply) => {
     try {
       const { projectId } = request.params as { projectId: string }
+
+      // Validate UUID format
+      if (!UUID_REGEX.test(projectId)) {
+        return reply.code(400).send({ error: 'Invalid project ID format' })
+      }
+
       const project = await Database.getProject(projectId)
 
       if (!project) {
@@ -88,6 +97,12 @@ export async function projectRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest, reply) => {
     try {
       const { projectId } = request.params as { projectId: string }
+
+      // Validate UUID format
+      if (!UUID_REGEX.test(projectId)) {
+        return reply.code(400).send({ error: 'Invalid project ID format' })
+      }
+
       const updates = request.body as { name?: string; description?: string }
 
       const project = await Database.getProject(projectId)
@@ -109,6 +124,11 @@ export async function projectRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest, reply) => {
     try {
       const { projectId } = request.params as { projectId: string }
+
+      // Validate UUID format
+      if (!UUID_REGEX.test(projectId)) {
+        return reply.code(400).send({ error: 'Invalid project ID format' })
+      }
 
       const project = await Database.getProject(projectId)
       if (!project) {
