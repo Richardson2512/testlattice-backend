@@ -146,6 +146,7 @@ export interface TestRun {
   reportSummary?: any; // Comprehensive report summary (ScoutQA-style)
   findings?: any[]; // Structured findings separate from execution steps
   userId?: string;
+  metadata?: Record<string, any>; // Stores tier, usage, and other context
 }
 
 export interface DiagnosisComponentInsight {

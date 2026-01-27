@@ -2411,11 +2411,14 @@ ${parsedInstructions.structuredPlan}
     const diagnosisData: DiagnosisResult | undefined = testRunData.testRun?.diagnosis
     const hasDiagnosis = !!diagnosisData
 
-    // Extract tier from test run metadata or default to 'guest'
-    // Try to get tier from run metadata, fallback to guest
+    // Extract tier from JobData (preferred), metadata, or default
     const runMetadata = testRunData.testRun?.metadata || {}
-    const userTier: 'guest' | 'starter' | 'indie' | 'pro' | 'agency' = runMetadata.tier ||
+    const userTier: 'guest' | 'starter' | 'indie' | 'pro' | 'agency' =
+      (jobData.userTier as any) ||
+      runMetadata.tier ||
       (options?.isGuestRun ? 'guest' : 'starter')
+
+    console.log(`[${runId}] Processing test for tier: ${userTier}`)
 
     // Try to restore budget from snapshot if available
     const budgetSnapshot = runMetadata.aiBudget
@@ -2448,6 +2451,12 @@ ${parsedInstructions.structuredPlan}
       build.type === BuildType.WEB &&
       Boolean(build.url) &&
       options?.testMode !== 'monkey'
+
+    if (shouldRunDiagnosis) {
+      console.log(`[${runId}] Diagnosis conditions met. Status: ${currentStatus}, HasDiagnosis: ${hasDiagnosis}`)
+    } else {
+      console.log(`[${runId}] Diagnosis skipped. Build: ${build.type}, URL: ${!!build.url}, Mode: ${options?.testMode}`)
+    }
 
     if (
       shouldRunDiagnosis &&

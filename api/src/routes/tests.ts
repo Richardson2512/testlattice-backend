@@ -198,6 +198,11 @@ export async function testRoutes(fastify: FastifyInstance) {
         profile,
         options: normalizedOptions,
         status: TestRunStatus.PENDING,
+        metadata: {
+          tier: userTier,
+          createdAt: new Date().toISOString(),
+          createdBy: request.user?.id || 'system',
+        },
       }, request.user?.id) // Pass authenticated user ID
 
       // Enqueue job
@@ -208,6 +213,7 @@ export async function testRoutes(fastify: FastifyInstance) {
           build,
           profile,
           options: normalizedOptions,
+          userTier, // Explicitly pass tier to worker
         })
 
         // Update status to queued only if enqueue succeeded

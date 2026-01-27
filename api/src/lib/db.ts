@@ -38,6 +38,7 @@ export class Database {
         visibility: data.visibility || 'private',
         report_summary: data.reportSummary || null,
         findings: data.findings || null,
+        metadata: data.metadata || null,
         created_at: now,
         updated_at: now,
       })
@@ -101,6 +102,7 @@ export class Database {
     if (updates.visibility !== undefined) updateData.visibility = updates.visibility
     if (updates.reportSummary !== undefined) updateData.report_summary = updates.reportSummary
     if (updates.findings !== undefined) updateData.findings = updates.findings
+    if (updates.metadata !== undefined) updateData.metadata = updates.metadata
 
     // Note: Update doesn't strictly enforce ownership in the query for now, 
     // relying on the getTestRun check before update in routes.
@@ -440,6 +442,7 @@ export class Database {
       visibility: row.visibility || 'private',
       reportSummary: row.report_summary || null,
       findings: row.findings || null,
+      metadata: row.metadata || null,
     }
   }
 
