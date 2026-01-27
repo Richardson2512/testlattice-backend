@@ -246,7 +246,7 @@ export class ModelClient {
                     messages,
                     response_format: { type: 'json_object' },
                     temperature: config.temperature,
-                    max_tokens: config.maxTokens,
+                    max_completion_tokens: config.maxTokens,
                 },
                 {
                     headers,
