@@ -9,6 +9,17 @@ services:
       - redis-data:/data
     command: redis-server --appendonly yes
 
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    env_file:
+      - ./worker/.env
+    depends_on:
+      - redis
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   # Uncomment when ready to use:
   # playwright-grid:
   #   image: playwright:latest
@@ -26,4 +37,5 @@ services:
 
 volumes:
   redis-data:
+
 

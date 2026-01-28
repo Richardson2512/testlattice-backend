@@ -695,25 +695,52 @@ export async function testRoutes(fastify: FastifyInstance) {
         return reply.code(404).send({ error: 'Test run not found' })
       }
 
-      // Get stream info from worker (via WebSocket or API)
-      // For now, return placeholder - worker will notify via WebSocket
-      const testControlWS = getTestControlWS()
-      if (testControlWS && 'getStats' in testControlWS) {
-        // Check if stream is available
-        // In production, this would query the worker for stream URL
-      }
-
-      // Return stream info (worker will update this via WebSocket)
+      // Return stream info from DB
       return reply.send({
-        streamUrl: process.env.FRAME_STREAM_BASE_URL
-          ? `${process.env.FRAME_STREAM_BASE_URL}/stream/${runId}`
-          : `http://localhost:8080/stream/${runId}`,
+        streamUrl: testRun.streamUrl,
         livekitUrl: process.env.LIVEKIT_URL,
-        // Token will be provided via WebSocket when stream starts
       })
     } catch (error: any) {
       fastify.log.error(error)
       return reply.code(500).send({ error: error.message || 'Failed to get stream info' })
+    }
+  })
+
+  // Update stream URL (called by worker when switching browsers)
+  fastify.post<{
+    Params: { runId: string }
+    Body: { browser: string; streamUrl: string; livekitToken?: string }
+  }>('/:runId/streams', async (request: any, reply: any) => {
+    try {
+      const { runId } = request.params
+      const { browser, streamUrl, livekitToken } = request.body
+
+      const testRun = await Database.getTestRun(runId)
+      if (!testRun) {
+        return reply.code(404).send({ error: 'Test run not found' })
+      }
+
+      // Update stream URL in database
+      await Database.updateTestRun(runId, {
+        streamUrl,
+      })
+
+      // Broadcast update via WebSocket to force UI refresh
+      const testControlWS = getTestControlWS()
+      if (testControlWS) {
+        testControlWS.broadcast(runId, {
+          type: 'stream_update',
+          browser,
+          streamUrl,
+          livekitToken,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
+      return reply.send({ success: true })
+    } catch (error: any) {
+      fastify.log.error(error)
+      return reply.code(500).send({ error: error.message || 'Failed to update stream info' })
     }
   })
 

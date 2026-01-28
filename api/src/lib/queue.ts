@@ -140,53 +140,21 @@ export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?:
     const browserMatrix = jobData.options?.browserMatrix
     const parentRunId = jobData.runId
 
-    if (browserMatrix && browserMatrix.length > 1) {
-      // Create separate jobs for each browser in the matrix
-      const jobs = []
-      for (const browserType of browserMatrix) {
-        const browserJobData: JobData = {
-          ...jobData,
-          browserType,
-          parentRunId,
-          // Create unique runId for each browser job
-          runId: `${parentRunId}-${browserType}`,
-        }
+    // Unified Job Enqueueing (Single or Multi-Browser handled by worker sequentially)
+    // We no longer split jobs here; the worker handles the browser matrix sequentially within one job.
+    const jobId = opts?.allowDuplicate ? undefined : `test-${jobData.runId}`
+    const priority = (jobData.userTier === 'pro' || jobData.userTier === 'enterprise') ? 10 : 1
 
-        const jobId = opts?.allowDuplicate ? undefined : `test-${browserJobData.runId}`
-        const priority = (jobData.userTier === 'pro' || jobData.userTier === 'enterprise') ? 10 : 1
-        const job = await queue.add('test-run', browserJobData, {
-          priority,
-          jobId,
-        })
+    const job = await queue.add('test-run', jobData, {
+      priority,
+      jobId,
+    })
 
-        // Critical: Set status key for DiagnosisOrchestrator
-        await connection.set(`test-run:${browserJobData.runId}:status`, 'queued', 'EX', 3600)
+    // Critical: Set status key for DiagnosisOrchestrator
+    await connection.set(`test-run:${jobData.runId}:status`, 'queued', 'EX', 3600)
 
-        jobs.push(job)
-        console.log(`✅ Browser job ${browserJobData.runId} (${browserType}) enqueued to test-runner (Job ID: ${job.id})`)
-      }
-      return jobs[0] // Return first job for compatibility
-    } else {
-      // Single browser job (default or single browser in matrix)
-      const browserType = browserMatrix?.[0] || 'chromium'
-      const singleJobData: JobData = {
-        ...jobData,
-        browserType: browserMatrix ? browserType : undefined, // Only set if explicitly in matrix
-      }
-
-      const jobId = opts?.allowDuplicate ? undefined : `test-${singleJobData.runId}`
-      const priority = (jobData.userTier === 'pro' || jobData.userTier === 'enterprise') ? 10 : 1
-      const job = await queue.add('test-run', singleJobData, {
-        priority,
-        jobId,
-      })
-
-      // Critical: Set status key for DiagnosisOrchestrator
-      await connection.set(`test-run:${singleJobData.runId}:status`, 'queued', 'EX', 3600)
-
-      console.log(`✅ Test run ${singleJobData.runId} enqueued to test-runner (Job ID: ${job.id})`)
-      return job
-    }
+    console.log(`✅ Test run ${jobData.runId} enqueued to test-runner (Job ID: ${job.id})`)
+    return job
   } catch (error: any) {
     console.error('❌ Failed to enqueue test run:', error.message)
     console.error('💡 Please check:')

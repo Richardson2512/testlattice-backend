@@ -113,6 +113,16 @@ export class PlaywrightRunner {
 
     const page = await context.newPage()
 
+    // Capture browser console logs
+    page.on('console', msg => {
+      const type = msg.type()
+      const text = msg.text()
+      // Filter out noisy logs if needed
+      if (!text.includes('[HMR]') && !text.includes('[WDS]')) {
+        console.log(`[Browser Console] [${type}] ${text}`)
+      }
+    })
+
     // Inject visual cursor and click indicator script for video recording
     await page.addInitScript(() => {
       // Create cursor element
