@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS test_runs (
   current_step INTEGER DEFAULT 0,
   guest_session_id TEXT,
   expires_at TIMESTAMPTZ,
+  visibility TEXT CHECK (visibility IN ('private', 'public')) DEFAULT 'private',
+  report_summary JSONB,
+  findings JSONB,
+  metadata JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -70,6 +74,8 @@ ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS guest_session_id TEXT;
 ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS visibility TEXT CHECK (visibility IN ('private', 'public')) DEFAULT 'private';
 ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS report_summary JSONB;
+ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS findings JSONB;
+ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS metadata JSONB;
 
 -- ----------------------------------------------------------------------------
 -- Test Artifacts table
@@ -397,10 +403,18 @@ DECLARE
   v_tests_used INTEGER;
   v_limit INTEGER;
 BEGIN
-  SELECT us.tier, us.tests_used_this_month 
-  INTO v_tier, v_tests_used
-  FROM user_subscriptions us
-  WHERE us.user_id = p_user_id;
+  -- Get user tier
+  SELECT tier INTO v_tier
+  FROM user_subscriptions
+  WHERE user_id = p_user_id;
+
+  -- Count actual non-cancelled tests from this month
+  -- We include completed, failed, and active tests. We EXCLUDE cancelled.
+  SELECT COUNT(*) INTO v_tests_used
+  FROM test_runs
+  WHERE user_id = p_user_id
+  AND created_at >= date_trunc('month', NOW())
+  AND status != 'cancelled';
   
   -- Set limits based on tier (matches pricing.ts)
   v_limit := CASE v_tier

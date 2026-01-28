@@ -158,6 +158,10 @@ export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?:
           priority,
           jobId,
         })
+
+        // Critical: Set status key for DiagnosisOrchestrator
+        await connection.set(`test-run:${browserJobData.runId}:status`, 'queued', 'EX', 3600)
+
         jobs.push(job)
         console.log(`✅ Browser job ${browserJobData.runId} (${browserType}) enqueued to test-runner (Job ID: ${job.id})`)
       }
@@ -176,6 +180,9 @@ export async function enqueueTestRun(jobData: JobData, opts?: { allowDuplicate?:
         priority,
         jobId,
       })
+
+      // Critical: Set status key for DiagnosisOrchestrator
+      await connection.set(`test-run:${singleJobData.runId}:status`, 'queued', 'EX', 3600)
 
       console.log(`✅ Test run ${singleJobData.runId} enqueued to test-runner (Job ID: ${job.id})`)
       return job
