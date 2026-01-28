@@ -26,9 +26,9 @@ USER worker
 # Must run as worker user so browsers go to correct cache location
 # Note: --with-deps requires root, so we install deps separately first
 USER root
-RUN npx playwright install-deps chromium
+RUN npx playwright install-deps chromium webkit firefox
 USER worker
-RUN npx playwright install chromium
+RUN npx playwright install chromium webkit firefox
 
 # Copy source code (as worker)
 USER root
