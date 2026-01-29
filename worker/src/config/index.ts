@@ -41,7 +41,7 @@ function buildRawConfig(): Record<string, unknown> {
             apiKeyBehavior: process.env.OPENAI_API_KEY_BEHAVIOR,
             apiUrl: process.env.OPENAI_API_URL,
             model: process.env.OPENAI_MODEL,
-            temperature: parseNumber(process.env.OPENAI_TEMPERATURE, 0.3),
+            temperature: parseNumber(process.env.OPENAI_TEMPERATURE, 1),
             maxTokens: parseNumber(process.env.OPENAI_MAX_TOKENS, 4096),
             orgId: process.env.OPENAI_ORG_ID,
         },

@@ -49,7 +49,7 @@ export class UnifiedBrainService {
             apiUrl: process.env.OPENAI_API_URL || 'https://api.openai.com/v1',
             apiKey: currentApiKey,
             model: process.env.OPENAI_MODEL || 'gpt-5-mini',
-            temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '0.3'),
+            temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '1'),
             maxTokens: parseInt(process.env.OPENAI_MAX_TOKENS || '4096', 10),
             clientLabel,
         }
