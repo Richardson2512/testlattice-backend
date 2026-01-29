@@ -723,6 +723,13 @@ async function safeUpdateStatus(
 // Main worker event handlers
 worker.on('completed', async (job: any) => {
   logger.info({ jobId: job.id }, '✓ Main job completed successfully')
+
+  // Skip status update if we're just finishing diagnosis (waiting for approval)
+  if (job?.returnvalue?.stage === 'diagnosis') {
+    logger.info({ runId: job?.data?.runId }, 'ℹ️ Skipping safety net status update (diagnosis stage/waiting approval)')
+    return
+  }
+
   // Safety net: Ensure DB is marked completed
   if (job?.data?.runId) {
     await safeUpdateStatus(job.id, job.data.runId, 'completed', undefined, job.returnvalue?.reportSummary)
