@@ -93,8 +93,8 @@ export class PlaywrightRunner {
     // Start trace recording (Time-Travel Debugger feature)
     // RE-ENABLED: Tracing enabled with Wasabi storage support
     let tracingStarted = false
-    // Use environment variable directly - config may not be available in this scope
-    const enableTracing = process.env.ENABLE_TRACING === 'true'
+    // Enable tracing if requested in profile (Paid users) OR if globally enabled via env
+    const enableTracing = profile.enableTrace === true || process.env.ENABLE_TRACING === 'true'
     if (enableTracing) {
       try {
         await context.tracing.start({

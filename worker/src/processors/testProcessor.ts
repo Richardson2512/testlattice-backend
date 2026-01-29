@@ -481,15 +481,15 @@ export class TestProcessor {
     parentRunId?: string,
     userTier: 'guest' | 'starter' | 'indie' | 'pro' | 'agency' = 'guest'
   ): Promise<ProcessResult> {
-    const browserResults: BrowserMatrixResult[] = []
+    // const browserResults: BrowserMatrixResult[] = [] // Removed to avoid redeclaration
     const allSteps: TestStep[] = []
     const allArtifacts: string[] = []
 
     // Get goal from build URL or diagnosis
     const goal = build.url || 'Complete test execution'
 
-    // Execute for each browser
-    for (const browserType of browserMatrix) {
+    // Execute for each browser in PARALLEL
+    const browserPromises = browserMatrix.map(async (browserType) => {
       const browserStartTime = Date.now()
       console.log(`[${runId}] [${browserType.toUpperCase()}] Starting execution...`)
 
@@ -510,8 +510,9 @@ export class TestProcessor {
 
       try {
         // Execute test sequence for this browser
-        // We'll call the existing execution logic but with browser-specific profile
-        const result = await this.executeTestSequenceForBrowser(
+        // Execute test sequence for this browser with global timeout safety
+        // Ensure that if the browser hangs indefinitely, we kill it
+        const executionPromise = this.executeTestSequenceForBrowser(
           runId,
           build,
           browserProfile,
@@ -529,6 +530,14 @@ export class TestProcessor {
           parentRunId,
           userTier
         )
+
+        const timeoutPromise = new Promise<{ steps: TestStep[]; artifacts: string[]; success: boolean; error?: string } | undefined>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`[${runId}] [${browserType.toUpperCase()}] Hard timeout: Execution exceeded ${maxDuration + 30000}ms`))
+          }, maxDuration + 30000)
+        })
+
+        const result = await Promise.race([executionPromise, timeoutPromise])
 
         if (!result) {
           throw new Error(`[${runId}] [${browserType.toUpperCase()}] executeTestSequenceForBrowser returned undefined`)
@@ -548,39 +557,39 @@ export class TestProcessor {
           }
         }))
 
-        browserResults.push({
+        console.log(`[${runId}] [${browserType.toUpperCase()}] Completed: ${browserSuccess ? 'PASS' : 'FAIL'} (${taggedSteps.length} steps, ${((Date.now() - browserStartTime) / 1000).toFixed(1)}s)`)
+
+        return {
           browser: browserType,
           success: browserSuccess,
           steps: taggedSteps,
           artifacts: browserArtifacts,
           error: browserError,
           executionTime: Date.now() - browserStartTime
-        })
-
-        allSteps.push(...taggedSteps)
-        allArtifacts.push(...browserArtifacts)
-
-        console.log(`[${runId}] [${browserType.toUpperCase()}] Completed: ${browserSuccess ? 'PASS' : 'FAIL'} (${taggedSteps.length} steps, ${((Date.now() - browserStartTime) / 1000).toFixed(1)}s)`)
+        } as BrowserMatrixResult
       } catch (error: any) {
         console.error(`[${runId}] [${browserType.toUpperCase()}] Execution failed:`, error.message)
-        browserSuccess = false
-        browserError = error.message
 
-        browserResults.push({
+        return {
           browser: browserType,
           success: false,
-          steps: browserSteps,
-          artifacts: browserArtifacts,
-          error: browserError,
+          steps: [],
+          artifacts: [],
+          error: error.message,
           executionTime: Date.now() - browserStartTime
-        })
-
-        allSteps.push(...browserSteps)
-        allArtifacts.push(...browserArtifacts)
+        } as BrowserMatrixResult
       }
-    }
+    })
+
+    // Wait for all browsers to complete
+    const browserResults = await Promise.all(browserPromises)
 
     // Aggregate results
+    browserResults.forEach(result => {
+      allSteps.push(...result.steps)
+      allArtifacts.push(...result.artifacts)
+    })
+
     const passedBrowsers = browserResults.filter(r => r.success).length
     const failedBrowsers = browserResults.filter(r => !r.success).length
     const overallSuccess = failedBrowsers === 0
@@ -655,7 +664,9 @@ export class TestProcessor {
         ? DeviceProfile.FIREFOX_LATEST
         : browserType === 'webkit'
           ? DeviceProfile.SAFARI_LATEST
-          : DeviceProfile.CHROME_LATEST
+          : DeviceProfile.CHROME_LATEST,
+      // Enable trace for paid tiers
+      enableTrace: userTier === 'pro' || userTier === 'agency' || userTier === 'indie' || userTier === 'starter'
     }
 
     let session: any = null
@@ -1043,6 +1054,7 @@ ${parsedInstructions.structuredPlan}
 
         // Site discovery for "all pages" mode
         let discoveredPages: Array<{ url: string; title: string; selector: string }> = []
+        let navigationQueue: Array<{ url: string; title: string; selector: string }> = []
         let siteDiscoveryComplete = false
 
         // Store user instructions for logging in each step
@@ -1098,6 +1110,11 @@ ${parsedInstructions.structuredPlan}
             }
 
             console.log(`[${runId}] [${browserType.toUpperCase()}] Site discovery complete: Found ${discoveredPages.length} unique pages to test`)
+
+            // Populate navigation queue with discovered pages (excluding current page)
+            navigationQueue = [...discoveredPages].filter(p => !visitedUrls.has(p.url))
+            console.log(`[${runId}] [${browserType.toUpperCase()}] Navigation queue initialized with ${navigationQueue.length} pages:`, navigationQueue.map(p => p.url).join(', '))
+
             siteDiscoveryComplete = true
           } catch (discoveryError: any) {
             console.warn(`[${runId}] [${browserType.toUpperCase()}] Site discovery failed:`, discoveryError.message)
@@ -1106,6 +1123,9 @@ ${parsedInstructions.structuredPlan}
 
         // State for locally tracking SSO tests in this browser session
         const testedSSOPages = new Set<string>()
+
+        // State for Smart Audit (track when we last ran comprehensive analysis)
+        let lastAnalyzedUrl: string | null = null
 
         // Main execution loop
         while (stepNumber < maxSteps && Date.now() - startTime < maxDuration) {
@@ -1203,7 +1223,15 @@ ${parsedInstructions.structuredPlan}
               runId,
               browserType,
               testableComponents: diagnosisData?.testableComponents || [],
+              // Smart Audit: Force analysis only on new pages or first step
+              forceAnalysis: stepNumber === 1 || (session.page.url() !== lastAnalyzedUrl)
             })
+
+            // Update lastAnalyzedUrl if analysis ran (implied by step 1 or url change)
+            if (stepNumber === 1 || session.page.url() !== lastAnalyzedUrl) {
+              lastAnalyzedUrl = session.page.url()
+              console.log(`[${runId}] [${browserType.toUpperCase()}] Smart Audit: Tracking analysis for ${lastAnalyzedUrl}`)
+            }
 
             // HARD INVARIANT: Preflight must be completed before context synthesis
             assertPreflightCompletedBeforeScreenshot(runId, 'TestProcessor.executeTestSequenceForBrowser')
@@ -1300,6 +1328,21 @@ ${parsedInstructions.structuredPlan}
               }
 
               // Speculative execution: attempt to batch obvious flows (e.g., login forms)
+              if (actionQueue.length === 0) {
+                // NAVIGATION QUEUE (Priority 2): Force navigation if queue is empty to ensure multi-page coverage
+                const nextNavTarget = navigationQueue.find(p => !visitedUrls.has(p.url))
+                if (nextNavTarget) {
+                  console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: 🧭 Priority Navigation - Visiting discovered page: ${nextNavTarget.url}`)
+                  actionQueue.push({
+                    action: 'navigate',
+                    value: nextNavTarget.url,
+                    description: `Navigating to discovered page: ${nextNavTarget.title} (${nextNavTarget.url})`
+                  })
+                  // Remove from queue
+                  navigationQueue = navigationQueue.filter(p => p.url !== nextNavTarget.url)
+                }
+              }
+
               if (actionQueue.length === 0) {
                 const speculativeActions = this.speculativeActionGenerator.generateSpeculativeActions(filteredContext, history)
                 if (speculativeActions.length > 0) {
@@ -1654,7 +1697,7 @@ ${parsedInstructions.structuredPlan}
               // Broadcast frame to WebSocket (via Redis)
               if (stateResult?.screenshot) {
                 const base64 = stateResult.screenshot
-                this.broadcastPageState(runId, base64, currentUrl || '')
+                this.broadcastPageState(runId, base64, currentUrl || '', browserType)
               }
 
               // Capture element bounds using TestExecutor
@@ -2643,14 +2686,15 @@ ${parsedInstructions.structuredPlan}
     }
   }
 
-  private async broadcastPageState(runId: string, screenshot: string, url: string) {
+  private async broadcastPageState(runId: string, screenshot: string, url: string, browser: string) {
     try {
       const payload = {
         type: 'page_state',
         state: {
           screenshot,
           url,
-          elements: []
+          elements: [],
+          browser // Add browser tag for frontend filtering
         }
       }
       await this.redis.publish('ws:broadcast', JSON.stringify({

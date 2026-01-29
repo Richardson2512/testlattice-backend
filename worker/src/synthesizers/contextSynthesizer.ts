@@ -25,6 +25,7 @@ export interface SynthesizeContextParams {
   runId: string
   browserType: 'chromium' | 'firefox' | 'webkit'
   testableComponents?: DiagnosisComponentInsight[] // Components identified as testable during diagnosis
+  forceAnalysis?: boolean // Force comprehensive analysis (e.g. on new page load)
 }
 
 export interface SynthesizeContextResult {
@@ -115,11 +116,11 @@ export class ContextSynthesizer {
             await this.comprehensiveTesting.initialize(sessionData.page)
           }
 
-          // Collect data at key steps (every 3 steps or on first step)
-          // Wrap each collector in try/catch to prevent one failure from breaking all collection
-          if (stepNumber === 1 || stepNumber % 3 === 0) {
-            console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Collecting comprehensive test data...`)
-            
+          // Collect data at key steps (Step 1, or when forced by navigation/major state change)
+          // This optimized "Smart Audit" strategy prevents checking A11y/Performance on every click
+          if (stepNumber === 1 || params.forceAnalysis) {
+            console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Collecting comprehensive test data (Smart Audit Triggered)...`)
+
             // Collect each metric independently - if one fails, others still run
             const collectionPromises = [
               this.comprehensiveTesting.collectPerformanceMetrics(sessionData.page).catch((err: any) => {
@@ -139,7 +140,7 @@ export class ContextSynthesizer {
                 return null
               }),
             ]
-            
+
             await Promise.all(collectionPromises)
             comprehensiveData = this.comprehensiveTesting.getResults()
             console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Comprehensive data collected - ${comprehensiveData.consoleErrors.length} console errors, ${comprehensiveData.networkErrors.length} network errors`)

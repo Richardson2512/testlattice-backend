@@ -75,6 +75,7 @@ export interface TestProfile {
     width: number
     height: number
   }
+  enableTrace?: boolean
 }
 
 export type TestEnvironment = 'development' | 'staging' | 'production'

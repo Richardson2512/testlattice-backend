@@ -7,43 +7,45 @@ import { TestRun, TestArtifact } from '../../types'
  * Get test mode label
  */
 function getModeLabel(testRun: TestRun): string {
-    switch (testRun.options?.testMode) {
-        case 'all':
-            return 'All Pages Crawl'
-        case 'multi':
-            return 'Multi-page Flow'
-        case 'monkey':
-            return 'Monkey Explorer'
-        default:
-            return 'Single Flow'
-    }
+  switch (testRun.options?.testMode) {
+    case 'all':
+      return 'All Pages Crawl'
+    case 'multi':
+      return 'Multi-page Flow'
+    case 'monkey':
+      return 'Monkey Explorer'
+    default:
+      return 'Single Flow'
+  }
 }
 
 /**
  * Generate status badge class
  */
 function getStatusClass(testRun: TestRun): string {
-    if (testRun.status === 'completed') return 'status-completed'
-    if (testRun.status === 'running') return testRun.paused ? 'status-paused' : 'status-running'
-    return 'status-failed'
+  if (testRun.status === 'completed') return 'status-completed'
+  if (testRun.status === 'running') return testRun.paused ? 'status-paused' : 'status-running'
+  return 'status-failed'
 }
 
 /**
  * Generate report HTML (works with partial steps) - for report-view endpoint
  */
 export function generateReportHtml(
-    runId: string,
-    testRun: TestRun,
-    steps: any[],
-    apiBaseUrl: string,
-    artifacts: TestArtifact[] = []
+  runId: string,
+  testRun: TestRun,
+  steps: any[],
+  apiBaseUrl: string,
+  artifacts: TestArtifact[] = []
 ): string {
-    const modeLabel = getModeLabel(testRun)
-    const healingSteps = steps.filter((step) => step?.selfHealing)
-    const videoArtifact = artifacts.find((artifact) => artifact.type === 'video')
-    const videoUrl = videoArtifact?.url || testRun.artifactsUrl || ''
+  const modeLabel = getModeLabel(testRun)
+  const healingSteps = steps.filter((step) => step?.selfHealing)
+  const videoArtifact = artifacts.find((artifact) => artifact.type === 'video')
+  const videoUrl = videoArtifact?.url || testRun.artifactsUrl || ''
+  const traceArtifact = artifacts.find((artifact) => artifact.type === 'trace')
+  const traceUrl = traceArtifact?.url || testRun.traceUrl || ''
 
-    return `
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -139,6 +141,17 @@ export function generateReportHtml(
       </div>
     `}
 
+    ${traceUrl ? `
+    <h2>Trace Viewer</h2>
+    <div style="background-color:#f0f9ff;border:1px solid #bae6fd;border-radius:0.5rem;padding:1rem;margin-bottom:1.5rem;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <strong style="color:#0369a1;display:block;margin-bottom:0.25rem;">Time-Travel Debugger Available</strong>
+        <span style="color:#0c4a6e;font-size:0.875rem;">Inspect every step, network request, and snapshot in the Playwright Trace Viewer.</span>
+      </div>
+      <a href="https://trace.playwright.dev/?trace=${encodeURIComponent(traceUrl)}" target="_blank" style="background-color:#0284c7;color:white;padding:0.5rem 1rem;border-radius:0.375rem;text-decoration:none;font-weight:600;font-size:0.875rem;">Open Trace Viewer →</a>
+    </div>
+    ` : ''}
+
     <h2>Test Steps (${steps.length})</h2>
     ${steps.length === 0 ? '<p>No steps completed yet.</p>' : steps.map((step) => `
     <div class="step">
@@ -148,11 +161,19 @@ export function generateReportHtml(
           ${step.success ? '✓ SUCCESS' : '✗ FAILED'}
         </span>
       </div>
-      <div class="step-details">
-        ${step.value ? `<p><strong>Value:</strong> ${step.value}</p>` : ''}
+        <h3>Step ${step.stepNumber}: ${step.action}${step.target ? ` → ${step.target}` : ''}</h3>
+        <p style="margin:0.25rem 0 0.5rem 0;color:#374151;">${step.description || ''}</p>
+        <div class="step-details">
+         ${step.value ? `<p><strong>Value:</strong> ${step.value}</p>` : ''}
         <p><strong>Timestamp:</strong> ${new Date(step.timestamp).toLocaleString()}</p>
         ${step.error ? `<p style="color: #991b1b;"><strong>Error:</strong> ${step.error}</p>` : ''}
-        ${step.screenshotUrl ? `<a href="${step.screenshotUrl}" target="_blank" class="artifact-link">View Screenshot →</a>` : ''}
+        ${step.screenshotUrl ? `
+          <div style="margin-top:0.5rem;">
+            <a href="${step.screenshotUrl}" target="_blank">
+              <img src="${step.screenshotUrl}" alt="Step ${step.stepNumber} Screenshot" style="max-width:100%;max-height:300px;border-radius:0.375rem;border:1px solid #e5e7eb;margin-top:0.5rem;" loading="lazy" />
+            </a>
+          </div>
+        ` : ''}
       </div>
     </div>
     `).join('')}
@@ -182,20 +203,22 @@ export function generateReportHtml(
  * Generate detailed report HTML with issues, warnings, and recommendations
  */
 export function generateDetailedReportHtml(
-    runId: string,
-    testRun: TestRun,
-    steps: any[],
-    issues: string[],
-    warnings: string[],
-    recommendations: string[],
-    artifacts: TestArtifact[] = []
+  runId: string,
+  testRun: TestRun,
+  steps: any[],
+  issues: string[],
+  warnings: string[],
+  recommendations: string[],
+  artifacts: TestArtifact[] = []
 ): string {
-    const modeLabel = getModeLabel(testRun)
-    const healingSteps = steps.filter(step => step?.selfHealing)
-    const videoArtifact = artifacts.find((artifact) => artifact.type === 'video')
-    const videoUrl = videoArtifact?.url || testRun.artifactsUrl || ''
+  const modeLabel = getModeLabel(testRun)
+  const healingSteps = steps.filter(step => step?.selfHealing)
+  const videoArtifact = artifacts.find((artifact) => artifact.type === 'video')
+  const videoUrl = videoArtifact?.url || testRun.artifactsUrl || ''
+  const traceArtifact = artifacts.find((artifact) => artifact.type === 'trace')
+  const traceUrl = traceArtifact?.url || testRun.traceUrl || ''
 
-    return `
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -244,6 +267,17 @@ export function generateDetailedReportHtml(
     <ul>${healingSteps.map(step => `
       <li class="recommendation">Step ${step.stepNumber}: ${step.selfHealing?.originalSelector} → ${step.selfHealing?.healedSelector}</li>
     `).join('')}</ul>
+    ` : ''}
+
+    ${traceUrl ? `
+    <h2>Trace Viewer</h2>
+    <div style="background-color:#f0f9ff;border:1px solid #bae6fd;border-radius:0.5rem;padding:1rem;margin-bottom:1.5rem;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <strong style="color:#0369a1;display:block;margin-bottom:0.25rem;">Time-Travel Debugger Available</strong>
+        <span style="color:#0c4a6e;font-size:0.875rem;">Inspect every step, network request, and snapshot in the Playwright Trace Viewer.</span>
+      </div>
+      <a href="https://trace.playwright.dev/?trace=${encodeURIComponent(traceUrl)}" target="_blank" style="background-color:#0284c7;color:white;padding:0.5rem 1rem;border-radius:0.375rem;text-decoration:none;font-weight:600;font-size:0.875rem;">Open Trace Viewer →</a>
+    </div>
     ` : ''}
 
     <h2>Statistics</h2>
