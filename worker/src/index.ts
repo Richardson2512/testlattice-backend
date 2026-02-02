@@ -379,7 +379,7 @@ async function processGuestJob(jobData: JobData) {
     }
 
     logger.info({ runId, success: result.success }, '🏁 Guest Processor Execution Completed')
-    return { ...result, reportSummary }
+    return { ...result, reportSummary, startTime }
 
   } catch (error: any) {
     // CRITICAL: Catch ALL errors (including session reservation) to prevent BullMQ retries
@@ -464,6 +464,7 @@ async function processTestJob(jobData: JobData) {
           steps: result.steps,
           summary: (result as any).reportSummary, // ScoutQA-style summary
           completedAt: new Date().toISOString(),
+          duration: (result as any).startTime ? Date.now() - (result as any).startTime.getTime() : null,
           reportUrl // Include Wasabi URL
         }),
       })
@@ -500,6 +501,9 @@ async function processTestJob(jobData: JobData) {
   logger.info({ runId, type: jobData.build.type, device: jobData.profile.device }, 'Processing test job')
 
   try {
+    // Track start time for duration calculation
+    const startTime = Date.now()
+
     // Process test run
     const result = await testProcessor.process(jobData)
 
@@ -530,6 +534,7 @@ async function processTestJob(jobData: JobData) {
           status: updateStatus,
           steps: result.steps,
           completedAt: new Date().toISOString(),
+          duration: Date.now() - startTime,
         }),
       })
 
