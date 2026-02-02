@@ -44,10 +44,34 @@ export async function billingRoutes(fastify: FastifyInstance) {
         throw error
       }
 
+      // For free users, get accurate test count dynamically (includes claimed guest tests)
+      // Paid users use static column tracking which is incremented on test creation
+      const tier = subscription?.tier || 'free'
+      let testsUsedCount = subscription?.tests_used_this_month || 0
+
+      if (tier === 'free') {
+        // Only dynamically count for free users (handles claimed guest tests)
+        try {
+          const { data: usageData, error: usageError } = await supabase.rpc('check_usage_limit', { p_user_id: userId })
+          if (!usageError && usageData?.[0]) {
+            testsUsedCount = usageData[0].tests_used
+          }
+        } catch (rpcError) {
+          // Fallback: count test runs directly
+          const { count } = await supabase
+            .from('test_runs')
+            .select('*', { count: 'exact', head: true })
+            .eq('user_id', userId)
+            .gte('created_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString())
+            .neq('status', 'cancelled')
+          testsUsedCount = count || 0
+        }
+      }
+
       const sub = subscription ? {
         tier: subscription.tier,
         status: subscription.status,
-        testsUsed: subscription.tests_used_this_month || 0,
+        testsUsed: testsUsedCount,
         visualTestsUsed: subscription.visual_tests_used_this_month || 0,
         addonVisualTests: subscription.addon_visual_tests || 0,
         currentPeriodStart: subscription.current_period_start,
@@ -59,7 +83,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
       } : {
         tier: 'free',
         status: 'active',
-        testsUsed: 0,
+        testsUsed: testsUsedCount,
         visualTestsUsed: 0,
         addonVisualTests: 0,
       }
