@@ -56,7 +56,8 @@ export class ModelClient {
     async call(
         prompt: string,
         systemPrompt: string,
-        task: 'action' | 'parse' | 'analyze' | 'synthesize' | 'heal'
+        task: 'action' | 'parse' | 'analyze' | 'synthesize' | 'heal',
+        options?: { useJsonFormat?: boolean }
     ): Promise<ModelCallResult> {
         this.metrics.totalCalls++
         const maxRetries = 2
@@ -69,7 +70,7 @@ export class ModelClient {
             const context = getTraceContext()
             // Only check limits if we have user context (registered/guest tests)
             if (context?.userId && context?.userTier) {
-                const estimatedTokens = (prompt.length + systemPrompt.length) / 4 + 500 // Rough estimate + buffer
+                const estimatedTokens = Math.max(Math.ceil((prompt.length + systemPrompt.length) / 3), 1500)
                 const result = await this.rateLimiter.check(
                     this.config.model,
                     context.userId,
@@ -92,12 +93,14 @@ export class ModelClient {
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-                const response = await this.callModel(this.config, prompt, systemPrompt)
+                // Determine if JSON format should be used
+                // Default: use JSON for all tasks except 'analyze' (which uses plain text)
+                const useJsonFormat = options?.useJsonFormat ?? (task !== 'analyze')
+                const response = await this.callModel(this.config, prompt, systemPrompt, useJsonFormat)
 
                 // Parse response
                 let parsedResponse: any
                 try {
-
                     parsedResponse = JSON.parse(response)
                 } catch {
                     // If not JSON, treat as success
@@ -150,16 +153,44 @@ export class ModelClient {
                     statusCode === 503 ||
                     error.code === 'ECONNRESET' ||
                     error.code === 'ETIMEDOUT' ||
+                    error.code === 'ECONNABORTED' ||
                     error.code === 'ENOTFOUND' ||
                     (error.response === undefined && attempt < maxRetries)
 
                 if (isRetryable && attempt < maxRetries) {
-                    // Exponential backoff: 1s, 2s, 4s (with ±10% jitter to avoid thundering herd)
+                    // Log detailed 429 error info for debugging
+                    if (statusCode === 429) {
+                        const errorBody = error.response?.data?.error || error.response?.data || {}
+                        const headers = error.response?.headers || {}
+
+                        // Determine error type
+                        const isQuotaError = errorBody.code === 'insufficient_quota'
+                        const isRateLimit = errorBody.message?.includes('Rate limit') || errorBody.type === 'tokens' || errorBody.type === 'requests'
+
+                        console.log(`[ModelClient][${this.clientLabel}] 🚨 OpenAI 429 Error Details:`)
+                        console.log(`  Type: ${isQuotaError ? 'QUOTA/BILLING' : isRateLimit ? 'RATE LIMIT' : 'UNKNOWN'}`)
+                        console.log(`  Message: ${errorBody.message || 'No message'}`)
+                        console.log(`  Code: ${errorBody.code || 'N/A'}`)
+                        console.log(`  Rate Limit Headers:`)
+                        console.log(`    x-ratelimit-remaining-requests: ${headers['x-ratelimit-remaining-requests'] || 'N/A'}`)
+                        console.log(`    x-ratelimit-remaining-tokens: ${headers['x-ratelimit-remaining-tokens'] || 'N/A'}`)
+                        console.log(`    x-ratelimit-reset-requests: ${headers['x-ratelimit-reset-requests'] || 'N/A'}`)
+                        console.log(`    x-ratelimit-reset-tokens: ${headers['x-ratelimit-reset-tokens'] || 'N/A'}`)
+                        console.log(`    retry-after: ${headers['retry-after'] || 'N/A'}`)
+
+                        // Use longer backoff for 429 (5s base instead of 1s)
+                        const backoff429 = 5000 * Math.pow(2, attempt)
+                        console.log(`[ModelClient][${this.clientLabel}] Retry ${attempt + 1}/${maxRetries} in ${backoff429}ms...`)
+                        await this.delay(backoff429)
+                        continue
+                    }
+
+                    // Exponential backoff for other errors: 1s, 2s, 4s (with ±10% jitter)
                     const exponentialDelay = baseDelayMs * Math.pow(2, attempt)
                     const jitter = exponentialDelay * 0.1 * (Math.random() - 0.5) // ±10% jitter
                     const backoffMs = Math.round(exponentialDelay + jitter)
 
-                    console.log(`[ModelClient][${this.clientLabel}] Rate limit or transient error (${statusCode || error.code}). Retry ${attempt + 1}/${maxRetries} in ${backoffMs}ms...`)
+                    console.log(`[ModelClient][${this.clientLabel}] Transient error (${statusCode || error.code}). Retry ${attempt + 1}/${maxRetries} in ${backoffMs}ms...`)
                     await this.delay(backoffMs)
                     continue
                 }
@@ -199,7 +230,7 @@ export class ModelClient {
     /**
      * Call Model logic (OpenAI / Anthropic / Gemini)
      */
-    private async callModel(config: ModelConfig, prompt: string, systemPrompt: string): Promise<string> {
+    private async callModel(config: ModelConfig, prompt: string, systemPrompt: string, useJsonFormat: boolean = true): Promise<string> {
         // Dispatch based on provider
         if (config.provider === 'anthropic') {
             return this.callAnthropic(config, prompt, systemPrompt)
@@ -208,10 +239,10 @@ export class ModelClient {
             return this.callGemini(config, prompt, systemPrompt)
         }
         // Default to OpenAI
-        return this.callOpenAI(config, prompt, systemPrompt)
+        return this.callOpenAI(config, prompt, systemPrompt, useJsonFormat)
     }
 
-    private async callOpenAI(config: ModelConfig, prompt: string, systemPrompt: string): Promise<string> {
+    private async callOpenAI(config: ModelConfig, prompt: string, systemPrompt: string, useJsonFormat: boolean = true): Promise<string> {
         // Validate configuration before making request
         if (!config.apiUrl || !config.model) {
             throw new Error(`Invalid model configuration: apiUrl=${config.apiUrl}, model=${config.model}`)
@@ -239,15 +270,22 @@ export class ModelClient {
         }
 
         try {
+            // Build request body - only include response_format if JSON mode is requested
+            const requestBody: Record<string, any> = {
+                model: config.model,
+                messages,
+                temperature: config.temperature,
+                max_completion_tokens: config.maxTokens,
+            }
+
+            // Only force JSON format when explicitly requested (not for plain text prompts)
+            if (useJsonFormat) {
+                requestBody.response_format = { type: 'json_object' }
+            }
+
             const response = await axios.post<ModelResponse>(
                 `${config.apiUrl}/chat/completions`,
-                {
-                    model: config.model,
-                    messages,
-                    response_format: { type: 'json_object' },
-                    temperature: config.temperature,
-                    max_completion_tokens: config.maxTokens,
-                },
+                requestBody,
                 {
                     headers,
                     timeout: 60000,
@@ -279,9 +317,7 @@ export class ModelClient {
             if (error.response?.status === 401) {
                 throw new Error(`GPT-5 Mini API authentication failed (401). Check OPENAI_API_KEY is valid.`)
             }
-            if (error.response?.status === 429) {
-                throw new Error(`GPT-5 Mini API rate limit exceeded (429). Please retry later.`)
-            }
+            // 429 logic removed to allow outer retry loop to handle it
             // Re-throw with context
             throw error
         }
@@ -386,60 +422,90 @@ export class ModelClient {
             }
         ]
 
-        try {
-            const response = await axios.post(
-                visionEndpoint,
-                {
-                    model: visionModel,
-                    messages,
-                    response_format: { type: 'json_object' },
-                    temperature: 0.2, // Lower temperature for more consistent element detection
-                    max_tokens: 4096,
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${this.config.apiKey}`,
-                        'Content-Type': 'application/json',
+        const maxRetries = 2
+        const baseDelayMs = 2000 // 2 seconds initial delay for Vision (slower)
+        let lastError: Error | null = null
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                const response = await axios.post(
+                    visionEndpoint,
+                    {
+                        model: visionModel,
+                        messages,
+                        response_format: { type: 'json_object' },
+                        temperature: 0.2,
+                        max_tokens: 4096,
                     },
-                    timeout: 60000,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${this.config.apiKey}`,
+                            'Content-Type': 'application/json',
+                        },
+                        timeout: 60000,
+                    }
+                )
+
+                const content = response.data.choices?.[0]?.message?.content
+                if (!content) {
+                    throw new Error('No response from GPT-4o Vision')
                 }
-            )
 
-            const content = response.data.choices?.[0]?.message?.content
-            if (!content) {
-                throw new Error('No response from GPT-4o Vision')
+                // Track token usage
+                const usage = response.data.usage
+                if (usage) {
+                    this.metrics.totalPromptTokens += usage.prompt_tokens || 0
+                    this.metrics.totalCompletionTokens += usage.completion_tokens || 0
+                    this.metrics.totalTokens += usage.total_tokens || 0
+                    console.log(`[TokenUsage][${this.clientLabel}][Vision] Call: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}, total=${usage.total_tokens}`)
+                }
+
+                this.metrics.success++
+                return {
+                    content,
+                    model: 'gpt-5-mini' as const, // Type compatibility
+                    attempt: attempt + 1,
+                    fallbackUsed: false,
+                }
+            } catch (error: any) {
+                lastError = error
+                const statusCode = error.response?.status
+                const errorMessage = error.response?.data?.error?.message || error.message
+
+                // Retryable errors: 429, 500+
+                const isRetryable = statusCode === 429 || statusCode >= 500
+
+                if (isRetryable && attempt < maxRetries) {
+                    const exponentialDelay = baseDelayMs * Math.pow(2, attempt)
+                    const jitter = exponentialDelay * 0.1 * (Math.random() - 0.5)
+                    const backoffMs = Math.round(exponentialDelay + jitter)
+
+                    console.log(`[ModelClient][${this.clientLabel}][Vision] Rate limit/Error (${statusCode}). Retry ${attempt + 1}/${maxRetries} in ${backoffMs}ms...`)
+                    await this.delay(backoffMs)
+                    continue
+                }
+
+                if (attempt === maxRetries) {
+                    this.metrics.failures++
+                    console.warn(`[ModelClient][${this.clientLabel}] Vision call failed after ${attempt + 1} attempts (${statusCode}): ${errorMessage}`)
+
+                    // Return empty result instead of throwing - allow DOM-only fallback
+                    return {
+                        content: JSON.stringify({ visibleElements: [], error: errorMessage }),
+                        model: 'gpt-5-mini' as const,
+                        attempt: attempt + 1,
+                        fallbackUsed: false,
+                    }
+                }
             }
+        }
 
-            // Track token usage
-            const usage = response.data.usage
-            if (usage) {
-                this.metrics.totalPromptTokens += usage.prompt_tokens || 0
-                this.metrics.totalCompletionTokens += usage.completion_tokens || 0
-                this.metrics.totalTokens += usage.total_tokens || 0
-                console.log(`[TokenUsage][${this.clientLabel}][Vision] Call: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}, total=${usage.total_tokens}`)
-            }
-
-            this.metrics.success++
-            return {
-                content,
-                model: 'gpt-5-mini' as const, // Type compatibility
-                attempt: 1,
-                fallbackUsed: false,
-            }
-        } catch (error: any) {
-            this.metrics.failures++
-            const statusCode = error.response?.status
-            const errorMessage = error.response?.data?.error?.message || error.message
-
-            console.warn(`[ModelClient][${this.clientLabel}] Vision call failed (${statusCode}): ${errorMessage}`)
-
-            // Return empty result instead of throwing - allow DOM-only fallback
-            return {
-                content: JSON.stringify({ visibleElements: [], error: errorMessage }),
-                model: 'gpt-5-mini' as const,
-                attempt: 1,
-                fallbackUsed: false,
-            }
+        // Ensure TS happy
+        return {
+            content: JSON.stringify({ visibleElements: [], error: 'Unknown vision error' }),
+            model: 'gpt-5-mini' as const,
+            attempt: maxRetries + 1,
+            fallbackUsed: false,
         }
     }
 

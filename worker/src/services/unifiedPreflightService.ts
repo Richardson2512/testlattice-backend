@@ -27,7 +27,7 @@ import { getCookieStatus, setCookieStatus, CookieStatus } from './cookieStatusTr
 import { setPreflightStatus, PreflightStatus } from './preflightInvariants' // Import SetPreflightStatus
 import { UnifiedBrainService } from './unifiedBrainService'
 import { ContextSynthesizer } from '../synthesizers/contextSynthesizer'
-import { ComprehensiveTestingService } from './comprehensiveTesting'
+import { AuditService } from './audit'
 import { PlaywrightRunner } from '../runners/playwright'
 
 export type PreflightState = 'DETECT' | 'CLASSIFY' | 'RESOLVE' | 'VERIFY' | 'FINALIZE'
@@ -78,7 +78,7 @@ export class UnifiedPreflightService {
   constructor(
     private unifiedBrain: UnifiedBrainService,
     private contextSynthesizer: ContextSynthesizer,
-    private comprehensiveTesting: ComprehensiveTestingService,
+    private auditService: AuditService,
     private playwrightRunner: PlaywrightRunner
   ) { }
 
@@ -103,7 +103,7 @@ export class UnifiedPreflightService {
       // ENSURE INVARIANT: Cookie status must be COMPLETED if we skip preflight
       // This prevents context synthesis from failing later
       setCookieStatus(runId, 'COMPLETED')
-      
+
       // ENSURE INVARIANT: Preflight status must be COMPLETED
       setPreflightStatus(runId, 'COMPLETED')
 
@@ -163,7 +163,7 @@ export class UnifiedPreflightService {
         visitedHrefs: new Set(),
         blockedSelectors: new Set(),
         isSelectorBlocked: () => false,
-        comprehensiveTesting: this.comprehensiveTesting,
+        auditService: this.auditService,
         playwrightRunner: this.playwrightRunner,
         appiumRunner: undefined,
         stepNumber: 0, // Preflight is step 0

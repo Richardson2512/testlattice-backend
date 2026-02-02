@@ -168,54 +168,111 @@ Return JSON:
 
     /**
      * Analyze page for testability - UI Diagnosis Phase
+     * Returns plain English narrative with titled sections (What/How/Why/Result)
      */
     async analyzePageTestability(context: VisionContext): Promise<TestabilityAnalysis> {
-        // Limit elements to fit token budget (60 elements max for testability analysis)
-        const limitedElements = context.elements.slice(0, 60)
-        const contextDescription = limitedElements
+        // Limit elements to 30 for faster analysis
+        const limitedElements = context.elements.slice(0, 30)
+        const elementSummary = limitedElements
             .map((e, idx) => {
-                const hidden = e.isHidden ? ' [HIDDEN]' : ''
                 const label = e.text || e.ariaLabel || e.name || 'unnamed'
-                return `${idx + 1}. ${e.type}${hidden}: "${label}" - selector: "${e.selector}"`
+                return `${e.type}: "${label.substring(0, 40)}"`
             })
-            .join('\n')
+            .join(', ')
 
-        const basePrompt = `Analyze these page elements for testability:
+        const pageUrl = context.metadata?.pageUrl || 'Unknown page'
 
-Provide:
-1. Summary of page purpose
-2. Testable components (name, selector, description, testability level)
-3. Non-testable components (name, reason)
-4. Recommended tests
-5. High-risk areas (third-party integrations, complex state, flaky components, security-sensitive, manual judgment)
+        const prompt = `Diagnose this web page for automated testing.
 
-Return JSON:
-{
-  "summary": "...",
-  "testableComponents": [{"name": "...", "selector": "...", "description": "...", "testability": "high|medium|low"}],
-  "nonTestableComponents": [{"name": "...", "reason": "..."}],
-  "recommendedTests": ["..."],
-  "highRiskAreas": [{"name": "...", "type": "...", "selector": "...", "description": "...", "riskLevel": "critical|high|medium|low", "requiresManualIntervention": true/false, "reason": "..."}]
-}`
+Page: ${pageUrl}
+Elements found: ${limitedElements.length} (${elementSummary.substring(0, 500)})
 
-        const systemPrompt = `You are an expert QA Automation Engineer specializing in risk assessment and testability analysis. Analyze web page elements and generate a comprehensive Testability Diagnosis Report with HIGH-RISK AREA DETECTION. Return valid JSON.`
+Write exactly 4 titled paragraphs:
 
-        // Build prompt with token budget enforcement
-        const prompt = buildBoundedPrompt(basePrompt, {
-            elements: contextDescription,
-        }, TOKEN_BUDGETS.testability)
+WHAT IS BEING DIAGNOSED?
+[1-2 sentences about the specific flows and risk areas on this page]
 
+HOW IS IT BEING DIAGNOSED?
+[1-2 sentences about the high-level method used]
+
+WHY IS IT BEING DIAGNOSED?
+[1-2 sentences tying to user experience or business impact]
+
+RESULT
+[Start with "Passed —" or "Failed —" followed by one sentence explanation]
+
+HARD RULES:
+- Plain English only
+- No bullet points or lists
+- No JSON or code
+- No internal service names
+- Max 120 words total
+- Keep each section to 1-2 sentences`
+
+        const systemPrompt = `You are a QA diagnostician who writes clear, concise reports for humans. Output ONLY plain English paragraphs with titled sections. Never use JSON, code blocks, or bullet points. Be direct and opinionated in your assessment.`
+
+        console.log('[PageAnalyzer] Starting AI analysis for page:', pageUrl)
         const result = await this.modelClient.call(
             prompt,
             systemPrompt,
             'analyze'
         )
+        console.log('[PageAnalyzer] AI analysis complete, content length:', result.content?.length)
 
-        try {
-            return JSON.parse(result.content)
-        } catch (error: any) {
-            console.error('PageAnalyzer Diagnosis Error:', error.message)
-            return this.getFallbackTestabilityAnalysis(context)
+        // Parse the plain text response into structured format
+        return this.parseNarrativeResponse(result.content, context)
+    }
+
+    /**
+     * Parse plain English narrative into TestabilityAnalysis structure
+     */
+    private parseNarrativeResponse(narrative: string, context: VisionContext): TestabilityAnalysis {
+        // Extract sections from narrative
+        const whatMatch = narrative.match(/WHAT IS BEING DIAGNOSED\??\s*([\s\S]*?)(?=HOW IS IT|$)/i)
+        const howMatch = narrative.match(/HOW IS IT BEING DIAGNOSED\??\s*([\s\S]*?)(?=WHY IS IT|$)/i)
+        const whyMatch = narrative.match(/WHY IS IT BEING DIAGNOSED\??\s*([\s\S]*?)(?=RESULT|$)/i)
+        const resultMatch = narrative.match(/RESULT\s*([\s\S]*?)$/i)
+
+        const what = whatMatch?.[1]?.trim() || ''
+        const how = howMatch?.[1]?.trim() || ''
+        const why = whyMatch?.[1]?.trim() || ''
+        const resultText = resultMatch?.[1]?.trim() || ''
+
+        const passed = resultText.toLowerCase().startsWith('passed')
+
+        // Build summary from narrative
+        const summary = `${what} ${resultText}`.trim()
+
+        // Create diagnosis narrative object
+        const diagnosisNarrative = {
+            what,
+            how,
+            why,
+            result: resultText,
+            passed,
+            fullNarrative: narrative
+        }
+
+        return {
+            summary,
+            testableComponents: passed ? context.elements.slice(0, 5).map(e => ({
+                name: e.text || e.type,
+                selector: e.selector || '',
+                description: 'Interactive element',
+                testability: 'high' as const,
+            })) : [],
+            nonTestableComponents: [],
+            recommendedTests: passed ? ['Visual regression', 'Navigation flow'] : ['Manual review required'],
+            highRiskAreas: passed ? [] : [{
+                name: 'Diagnosis Issue',
+                type: 'manual_judgment',
+                description: resultText,
+                riskLevel: 'high',
+                requiresManualIntervention: true,
+                reason: resultText,
+            }],
+            // New field for narrative display
+            diagnosisNarrative,
         }
     }
 

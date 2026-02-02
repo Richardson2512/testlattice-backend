@@ -103,6 +103,8 @@ export class Database {
     if (updates.reportSummary !== undefined) updateData.report_summary = updates.reportSummary
     if (updates.findings !== undefined) updateData.findings = updates.findings
     if (updates.metadata !== undefined) updateData.metadata = updates.metadata
+    if (updates.testabilityContract !== undefined) updateData.testability_contract = updates.testabilityContract
+    if (updates.perTypeDiagnosis !== undefined) updateData.per_type_diagnosis = updates.perTypeDiagnosis
 
     // Note: Update doesn't strictly enforce ownership in the query for now, 
     // relying on the getTestRun check before update in routes.
@@ -443,6 +445,8 @@ export class Database {
       reportSummary: row.report_summary || null,
       findings: row.findings || null,
       metadata: row.metadata || null,
+      testabilityContract: row.testability_contract || null,
+      perTypeDiagnosis: row.per_type_diagnosis || null,
     }
   }
 

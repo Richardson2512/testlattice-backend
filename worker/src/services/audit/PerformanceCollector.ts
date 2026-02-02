@@ -1,7 +1,7 @@
 // Performance Collector - Collects Core Web Vitals and Page Performance Metrics
 
 import { Page } from 'playwright'
-import { PerformanceMetrics } from './types'
+import { PerformanceMetrics } from '../../types'
 
 export class PerformanceCollector {
     /**

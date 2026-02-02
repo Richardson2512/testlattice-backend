@@ -135,8 +135,58 @@ export async function testRoutes(fastify: FastifyInstance) {
         approvalPolicy: options?.approvalPolicy ?? { mode: 'manual' as const },
       })
 
+      // Credential lookup for paid users: If credentialId is provided, fetch and decrypt
+      let resolvedCredentials = restrictedOptions.guestCredentials
+      if (options?.credentialId && request.user?.id) {
+        try {
+          const supabase = getSupabaseClient()
+          const { data: credential, error } = await supabase
+            .from('credentials')
+            .select('id, name, username, email, password_encrypted')
+            .eq('id', options.credentialId)
+            .eq('user_id', request.user.id)
+            .single()
+
+          if (error || !credential) {
+            fastify.log.warn(`Credential ${options.credentialId} not found for user ${request.user.id}`)
+          } else {
+            // Decrypt password using the same encryption logic as credentials.ts
+            const ENCRYPTION_KEY = process.env.CREDENTIALS_ENCRYPTION_KEY || 'default-key-change-in-production'
+            const crypto = await import('crypto')
+
+            const decrypt = (encryptedText: string): string => {
+              try {
+                const [ivHex, encrypted] = encryptedText.split(':')
+                if (!ivHex || !encrypted) return ''
+                const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32)
+                const iv = Buffer.from(ivHex, 'hex')
+                const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv)
+                let decrypted = decipher.update(encrypted, 'hex', 'utf8')
+                decrypted += decipher.final('utf8')
+                return decrypted
+              } catch {
+                return ''
+              }
+            }
+
+            const decryptedPassword = decrypt(credential.password_encrypted)
+
+            resolvedCredentials = {
+              email: credential.email || undefined,
+              username: credential.username || undefined,
+              password: decryptedPassword,
+            }
+
+            fastify.log.info(`Credential ${credential.name} resolved for test with ${credential.email || credential.username}`)
+          }
+        } catch (credError: any) {
+          fastify.log.error(`Failed to lookup credential ${options.credentialId}:`, credError)
+        }
+      }
+
       const normalizedOptions = {
         ...restrictedOptions,
+        guestCredentials: resolvedCredentials, // Use resolved credentials (from ID lookup or passed directly)
         userTier, // Pass tier to worker for downstream enforcement
       }
 
@@ -216,12 +266,17 @@ export async function testRoutes(fastify: FastifyInstance) {
           userTier, // Explicitly pass tier to worker
         })
 
-        // Update status to queued only if enqueue succeeded
+        // Update status after successful enqueue
+        // Paid users (starter, indie, pro, agency) start in DIAGNOSING to show diagnosis page immediately
+        // Free/Guest users would start in QUEUED (though they use guest flow)
+        const isPaidTier = userTier !== 'guest' && userTier !== 'free'
+        const initialStatus = isPaidTier ? TestRunStatus.DIAGNOSING : TestRunStatus.QUEUED
+
         await Database.updateTestRun(testRun.id, {
-          status: TestRunStatus.QUEUED,
+          status: initialStatus,
         })
 
-        fastify.log.info(`Test run ${testRun.id} enqueued successfully`)
+        fastify.log.info(`Test run ${testRun.id} enqueued successfully with initial status: ${initialStatus}`)
 
         // Enforce Usage Limits: Increment usage immediately after successful enqueue
         // This ensures the backend tracks usage regardless of frontend actions
@@ -321,9 +376,13 @@ export async function testRoutes(fastify: FastifyInstance) {
       const guestSessionId = getGuestSessionFromCookie(request)
       const isGuestOwner = testRun.guestSessionId && testRun.guestSessionId === guestSessionId
 
-      // Allow if public, owner, or guest owner
-      // TODO: Add team access check here
-      if (!isPublic && !isOwner && !isGuestOwner) {
+      // Internal Worker Access - Allow worker service to fetch test run status
+      // Worker calls come from localhost and don't have user authentication
+      const isInternalRequest = request.headers['x-internal-worker'] === 'true' ||
+        request.headers.host?.includes('localhost')
+
+      // Allow if public, owner, guest owner, or internal worker request
+      if (!isPublic && !isOwner && !isGuestOwner && !isInternalRequest) {
         return reply.code(403).send({ error: 'Access denied: Private test run' })
       }
 
@@ -419,6 +478,19 @@ export async function testRoutes(fastify: FastifyInstance) {
       await Database.updateTestRun(runId, {
         status: TestRunStatus.CANCELLED,
       })
+
+      // Decrement usage count for cancelled tests so they don't count toward quota
+      // Only decrement if test has a userId (not guest tests)
+      if (testRun.userId) {
+        try {
+          const supabase = getSupabaseClient()
+          await supabase.rpc('decrement_test_usage', { p_user_id: testRun.userId })
+          fastify.log.info(`Usage decremented for cancelled test ${runId} (user: ${testRun.userId})`)
+        } catch (usageError) {
+          // Log but don't fail the cancel request
+          fastify.log.warn({ err: usageError }, `Failed to decrement usage for cancelled test ${runId}`)
+        }
+      }
 
       return reply.send({ success: true, testRun: await Database.getTestRun(runId) })
     } catch (error: any) {
@@ -655,27 +727,39 @@ export async function testRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest, reply: any) => {
     try {
       const { runId } = request.params as { runId: string }
+      fastify.log.info(`[${runId}] Approval requested`)
 
       const testRun = await Database.getTestRun(runId)
       if (!testRun) {
+        fastify.log.warn(`[${runId}] Test run not found for approval`)
         return reply.code(404).send({ error: 'Test run not found' })
       }
 
       if (testRun.status !== TestRunStatus.WAITING_APPROVAL) {
+        fastify.log.info(`[${runId}] Cannot approve - status is ${testRun.status}, not waiting_approval`)
         return reply.code(400).send({ error: 'Test run is not waiting for approval' })
       }
 
+      // Update status first (so job sees QUEUED status when it runs)
+      await Database.updateTestRun(runId, {
+        status: TestRunStatus.QUEUED
+      })
+      fastify.log.info(`[${runId}] Status updated to QUEUED`)
+
+      // Get user tier for proper job processing (handles all tiers: guest, free, pro, enterprise)
+      const { getUserTier } = await import('../lib/tierSystem')
+      const userTier = testRun.userId ? await getUserTier(testRun.userId) : 'guest'
+
+      // Enqueue the job for execution
       await enqueueTestRun({
         runId: testRun.id,
         projectId: testRun.projectId,
         build: testRun.build,
         profile: testRun.profile,
-        options: testRun.options
+        options: testRun.options,
+        userTier
       }, { allowDuplicate: true })
-
-      await Database.updateTestRun(runId, {
-        status: TestRunStatus.QUEUED
-      })
+      fastify.log.info(`[${runId}] ✅ Job re-enqueued for execution (tier: ${userTier})`)
 
       const updatedRun = await Database.getTestRun(runId)
       return reply.send({ success: true, testRun: updatedRun })

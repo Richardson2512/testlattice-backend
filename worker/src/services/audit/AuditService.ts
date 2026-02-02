@@ -16,10 +16,10 @@ import {
   ThirdPartyDependency,
   ComprehensiveTestResults,
   DesignSpec
-} from '../types'
-import type { VisionValidatorService } from './visionValidator'
+} from '../../types' // Corrected import path
+import type { VisionValidatorService } from '../visionValidator'
 
-export class ComprehensiveTestingService {
+export class AuditService { // Renamed class
   private consoleErrors: ConsoleError[] = []
   private networkErrors: NetworkError[] = []
   private performanceMetrics: PerformanceMetrics | null = null

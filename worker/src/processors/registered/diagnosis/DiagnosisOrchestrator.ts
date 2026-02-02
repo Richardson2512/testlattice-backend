@@ -17,6 +17,14 @@ import {
 import { logger } from '../../../observability'
 import { DiagnosisCrawler, DiagnosisCrawlerConfig, DiagnosisCrawlerDependencies } from '../diagnosis/DiagnosisCrawler'
 import { DiagnosisCancelledError } from '../../types'
+import {
+    TestabilityContract,
+    TestabilityContractInput,
+    ITestabilityAnalyzer,
+    TestType,
+    FrontendTestType,
+} from '../../../services/testabilityAnalyzer'
+import { DiagnosisByTestType, AggregatedDiagnosis } from '../../../services/diagnosis'
 
 // ============================================================================
 // Configuration
@@ -27,6 +35,7 @@ export interface DiagnosisOrchestratorConfig {
     apiUrl: string
     navigationDelayMs: number
     maxPages: number
+    selectedTestTypes?: FrontendTestType[]  // Frontend test types to diagnose
 }
 
 // ============================================================================
@@ -53,7 +62,11 @@ export interface DiagnosisOrchestratorDependencies {
         analyzeScreenshot: (screenshot: string, dom: string, mode: string) => Promise<VisionContext>
         analyzePageTestability: (context: VisionContext) => Promise<any>
     }
-    comprehensiveTesting: {
+    // NEW: Testability analyzer for contract generation
+    testabilityAnalyzer?: ITestabilityAnalyzer
+
+    // DEPRECATED: Comprehensive testing (kept for backward compatibility, will be removed)
+    auditService?: {
         initialize: (page: Page) => Promise<any>
         collectPerformanceMetrics: (page: Page) => Promise<any>
         checkAccessibility: (page: Page) => Promise<any>
@@ -108,6 +121,7 @@ export interface DiagnosisSnapshotResult {
     screenshotUrl?: string
     screenshotUrls?: string[]
     comprehensiveTests?: any
+    perTypeDiagnosis?: AggregatedDiagnosis  // Per-test-type can/cannot test results
 }
 
 // ============================================================================
@@ -170,7 +184,7 @@ export class DiagnosisOrchestrator {
             await this.updateTestStatus(runId, TestRunStatus.DIAGNOSING)
             await this.deps.ensureDiagnosisActive(runId)
 
-            // STEP 2: Navigate
+            // STEP 2: Navigate (with resilient error handling)
             await this.deps.updateDiagnosisProgress(runId, {
                 step: 2,
                 totalSteps,
@@ -181,12 +195,67 @@ export class DiagnosisOrchestrator {
                 percent: 15,
             })
 
-            await this.deps.playwrightRunner.executeAction(session.id, {
-                action: 'navigate',
-                value: build.url,
-                description: `Navigate to ${build.url}`,
-            })
-            await this.delay(this.config.navigationDelayMs)
+            // Resilient navigation - catch errors and flag them instead of failing
+            let navigationError: Error | null = null
+            try {
+                await this.deps.playwrightRunner.executeAction(session.id, {
+                    action: 'navigate',
+                    value: build.url,
+                    description: `Navigate to ${build.url}`,
+                })
+                await this.delay(this.config.navigationDelayMs)
+            } catch (error: any) {
+                // Flag the navigation error but DON'T fail the diagnosis
+                navigationError = error
+                logger.warn({ runId, error: error.message }, '⚠️ Navigation failed - flagging as critical issue and continuing')
+            }
+
+            // If navigation failed, create partial diagnosis with error flagged as critical finding
+            if (navigationError) {
+                const errorDiagnosis: DiagnosisResult = {
+                    testableComponents: [],
+                    nonTestableComponents: [],
+                    highRiskAreas: [{
+                        name: 'Navigation Failure',
+                        description: `Unable to load ${build.url}: ${navigationError.message}`,
+                        riskLevel: 'critical',
+                        type: 'complex_state',  // Using complex_state as closest match for navigation issues
+                        requiresManualIntervention: true,
+                        reason: 'The page could not be loaded. This may indicate slow page performance, network issues, or the site being unavailable.',
+                        selector: 'document'
+                    }],
+                    pages: [{
+                        id: 'page-0',
+                        label: 'Landing page',
+                        url: build.url,
+                        action: 'Navigation failed',
+                        summary: `Failed to load ${build.url}`,
+                        testableComponents: [],
+                        nonTestableComponents: [],
+                        recommendedTests: [],
+                    }],
+                    summary: `Navigation to ${build.url} failed. The page may be slow, unavailable, or blocking automated access.`,
+                    recommendedTests: [],
+                }
+
+                // Update progress to show error was captured
+                await this.deps.updateDiagnosisProgress(runId, {
+                    step: totalSteps,
+                    totalSteps,
+                    stepLabel: 'Navigation issue detected - awaiting review',
+                    subStep: 1,
+                    totalSubSteps: 1,
+                    subStepLabel: 'Error flagged',
+                    percent: 100,
+                })
+
+                // Update test with partial diagnosis (error flagged as critical finding)
+                await this.updateTestWithDiagnosis(runId, errorDiagnosis, 'wait', null, null)
+                await this.deps.notifyDiagnosisPending(runId, jobData, errorDiagnosis)
+
+                logger.info({ runId }, 'Navigation error captured as critical finding. Awaiting user review.')
+                return 'wait'  // Return to user for review instead of failing
+            }
 
             await this.deps.updateDiagnosisProgress(runId, {
                 step: 2,
@@ -218,6 +287,25 @@ export class DiagnosisOrchestrator {
                     }).catch(() => { })
                 }
             })
+
+            // Generate Testability Contract (NEW)
+            let testabilityContract: TestabilityContract | null = null
+            if (this.deps.testabilityAnalyzer && session) {
+                try {
+                    const selectedTestTypes = (jobData.options?.selectedTestTypes || ['navigation']) as TestType[]
+                    testabilityContract = await this.deps.testabilityAnalyzer.generateContract(
+                        {
+                            urls: [build.url],
+                            selectedTestTypes,
+                            executionMode: isMultiPage ? 'multi-page' : 'single',
+                        },
+                        session.page
+                    )
+                    logger.info({ runId, confidence: testabilityContract.overallConfidence }, 'Testability contract generated')
+                } catch (error: any) {
+                    logger.warn({ runId, error: error.message }, 'Testability contract generation failed')
+                }
+            }
 
             const currentUrl = await this.deps.playwrightRunner.getCurrentUrl(session.id).catch(() => build.url)
             const visitedUrls = new Set<string>()
@@ -274,8 +362,8 @@ export class DiagnosisOrchestrator {
                 percent: 100,
             })
 
-            // Update with diagnosis results
-            await this.updateTestWithDiagnosis(runId, aggregatedDiagnosis, decision)
+            // Update with diagnosis results (including per-test-type can/cannot)
+            await this.updateTestWithDiagnosis(runId, aggregatedDiagnosis, decision, testabilityContract, baseSnapshot.perTypeDiagnosis)
 
             if (decision === 'wait') {
                 logger.info({ runId }, 'Diagnosis complete. Waiting for approval.')
@@ -373,23 +461,25 @@ export class DiagnosisOrchestrator {
             },
         }
 
-        // Comprehensive testing
-        let comprehensiveTests: any = null
+        // Run per-test-type diagnosis (steps add up based on selected types)
+        // Get selectedTestTypes from job data or default to navigation
+        const selectedTestTypes = (this.config as any).selectedTestTypes as FrontendTestType[] || ['navigation']
+        logger.info({ runId, selectedTestTypes }, `Running per-test-type diagnosis (${DiagnosisByTestType.getStepCount(selectedTestTypes)} steps)...`)
+
+        let perTypeDiagnosis: AggregatedDiagnosis | null = null
         try {
-            await this.deps.comprehensiveTesting.initialize(session.page)
-            await Promise.all([
-                this.deps.comprehensiveTesting.collectPerformanceMetrics(session.page),
-                this.deps.comprehensiveTesting.checkAccessibility(session.page),
-                this.deps.comprehensiveTesting.analyzeDOMHealth(session.page),
-                this.deps.comprehensiveTesting.detectVisualIssues(session.page),
-                this.deps.comprehensiveTesting.checkSecurity(session.page),
-                this.deps.comprehensiveTesting.checkSEO(session.page),
-                this.deps.comprehensiveTesting.analyzeThirdPartyDependencies(session.page),
-            ])
-            comprehensiveTests = this.deps.comprehensiveTesting.getResults()
+            perTypeDiagnosis = await DiagnosisByTestType.run(session.page, selectedTestTypes)
+            logger.info({
+                runId,
+                totalSteps: perTypeDiagnosis.totalSteps,
+                canTest: perTypeDiagnosis.combined.allCanTest.length,
+                cannotTest: perTypeDiagnosis.combined.allCannotTest.length
+            }, 'Per-test-type diagnosis completed')
         } catch (error: any) {
-            logger.warn({ runId, error: error.message }, 'Comprehensive testing failed')
+            logger.warn({ runId, error: error.message }, 'Per-test-type diagnosis failed')
         }
+
+        const comprehensiveTests: any = null
 
         // Semantic analysis
         let semanticAnalysis: any = {
@@ -494,6 +584,7 @@ export class DiagnosisOrchestrator {
             screenshotUrl,
             screenshotUrls,
             comprehensiveTests,
+            perTypeDiagnosis: perTypeDiagnosis || undefined,
         }
     }
 
@@ -531,7 +622,7 @@ export class DiagnosisOrchestrator {
      */
     private async updateTestStatus(runId: string, status: TestRunStatus): Promise<void> {
         const fetch = (await import('node-fetch')).default
-        await fetch(`${this.config.apiUrl}/api/tests/${runId}`, {
+        const response = await fetch(`${this.config.apiUrl}/api/tests/${runId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -539,6 +630,10 @@ export class DiagnosisOrchestrator {
                 startedAt: new Date().toISOString(),
             }),
         })
+        if (!response.ok) {
+            const errorText = await response.text()
+            logger.warn({ runId, status: response.status, body: errorText }, '⚠️ Diagnosis status update failed')
+        }
     }
 
     /**
@@ -547,18 +642,30 @@ export class DiagnosisOrchestrator {
     private async updateTestWithDiagnosis(
         runId: string,
         diagnosis: DiagnosisResult,
-        decision: 'auto' | 'wait'
+        decision: 'auto' | 'wait',
+        testabilityContract?: TestabilityContract | null,
+        perTypeDiagnosis?: AggregatedDiagnosis | null
     ): Promise<void> {
         const fetch = (await import('node-fetch')).default
         const payload: any = { diagnosis }
+        if (testabilityContract) {
+            payload.testabilityContract = testabilityContract
+        }
+        if (perTypeDiagnosis) {
+            payload.perTypeDiagnosis = perTypeDiagnosis
+        }
         if (decision === 'wait') {
             payload.status = TestRunStatus.WAITING_APPROVAL
         }
-        await fetch(`${this.config.apiUrl}/api/tests/${runId}`, {
+        const response = await fetch(`${this.config.apiUrl}/api/tests/${runId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         })
+        if (!response.ok) {
+            const errorText = await response.text()
+            logger.warn({ runId, status: response.status, body: errorText }, '⚠️ Diagnosis result update failed')
+        }
     }
 
     private delay(ms: number): Promise<void> {

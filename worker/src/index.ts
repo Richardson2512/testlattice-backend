@@ -523,7 +523,7 @@ async function processTestJob(jobData: JobData) {
 
     try {
       const fetch = (await import('node-fetch')).default
-      await fetch(`${apiUrl}/api/tests/${runId}`, {
+      const patchResponse = await fetch(`${apiUrl}/api/tests/${runId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -532,8 +532,15 @@ async function processTestJob(jobData: JobData) {
           completedAt: new Date().toISOString(),
         }),
       })
-    } catch (apiError) {
-      logger.error({ runId, err: apiError }, 'Failed to update API')
+
+      if (!patchResponse.ok) {
+        const errorText = await patchResponse.text()
+        logger.error({ runId, status: patchResponse.status, body: errorText }, '❌ API status update returned error')
+      } else {
+        logger.info({ runId, status: updateStatus }, '✅ API status updated successfully')
+      }
+    } catch (apiError: any) {
+      logger.error({ runId, err: apiError.message, stack: apiError.stack }, '❌ Failed to update API - network or fetch error')
     }
 
     // Save token usage after execution completes
@@ -585,7 +592,7 @@ async function processTestJob(jobData: JobData) {
     const apiUrl = process.env.API_URL || 'http://localhost:3001'
     try {
       const fetch = (await import('node-fetch')).default
-      await fetch(`${apiUrl}/api/tests/${runId}`, {
+      const patchResponse = await fetch(`${apiUrl}/api/tests/${runId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -594,8 +601,15 @@ async function processTestJob(jobData: JobData) {
           completedAt: new Date().toISOString(),
         }),
       })
-    } catch (apiError) {
-      logger.error({ runId, err: apiError }, 'Failed to update API')
+
+      if (!patchResponse.ok) {
+        const errorText = await patchResponse.text()
+        logger.error({ runId, status: patchResponse.status, body: errorText }, '❌ API status update (error path) returned error')
+      } else {
+        logger.info({ runId }, '✅ API status updated successfully (error path)')
+      }
+    } catch (apiError: any) {
+      logger.error({ runId, err: apiError.message, stack: apiError.stack }, '❌ Failed to update API (error path)')
       if (config.sentry.dsn) {
         try {
           Sentry.captureException(apiError, {
@@ -631,6 +645,10 @@ try {
     {
       connection,
       concurrency: config.worker.concurrency || 5,
+      // Stale job recovery settings
+      stalledInterval: 30000, // Check for stalled jobs every 30 seconds
+      lockDuration: 60000, // Lock expires after 60 seconds (allows recovery)
+      maxStalledCount: 2, // Retry stalled jobs up to 2 times before failing
     }
   )
 
@@ -655,6 +673,10 @@ try {
     {
       connection,
       concurrency: 3, // Lower concurrency for guest tests
+      // Stale job recovery settings
+      stalledInterval: 30000,
+      lockDuration: 60000,
+      maxStalledCount: 2,
     }
   )
 
@@ -699,7 +721,7 @@ async function safeUpdateStatus(
         // Ignore check errors, proceed to update
       }
 
-      await fetch(`${apiUrl}/api/tests/${runId}`, {
+      const patchResponse = await fetch(`${apiUrl}/api/tests/${runId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -709,6 +731,14 @@ async function safeUpdateStatus(
           completedAt: new Date().toISOString()
         })
       })
+
+      if (!patchResponse.ok) {
+        const errorText = await patchResponse.text()
+        logger.warn({ runId, status: patchResponse.status, body: errorText, attempt: i + 1 }, '⚠️ Safety Net: API returned error status')
+        // Continue to retry
+        if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (i + 1)))
+        continue
+      }
 
       logger.info({ runId, status, attempt: i + 1 }, '✅ Safety Net: Status synced to DB')
       return // Success

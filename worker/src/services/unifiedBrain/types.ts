@@ -68,6 +68,15 @@ export interface ActionGenerationOptions {
     page?: any
 }
 
+export interface DiagnosisNarrative {
+    what: string       // What is being diagnosed
+    how: string        // How it is being diagnosed
+    why: string        // Why it is being diagnosed
+    result: string     // Passed/Failed with explanation
+    passed: boolean    // Quick check for pass/fail
+    fullNarrative: string  // Original AI response
+}
+
 export interface TestabilityAnalysis {
     summary: string
     testableComponents: Array<{
@@ -79,6 +88,7 @@ export interface TestabilityAnalysis {
     nonTestableComponents: Array<{ name: string; reason: string }>
     recommendedTests: string[]
     highRiskAreas?: HighRiskArea[]
+    diagnosisNarrative?: DiagnosisNarrative  // New: plain English diagnosis
 }
 
 export interface ErrorAnalysis {

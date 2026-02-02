@@ -104,8 +104,7 @@ export class AccessibilityMapService {
       ]
 
       // Helper to generate best selector
-      // Helper to generate best selector
-      function generateBestSelector(el: Element): string {
+      const generateBestSelector = (el: Element): string => {
         if (el.id) return `#${el.id}`
         const testId = el.getAttribute('data-testid')
         if (testId) return `[data-testid="${testId}"]`
@@ -152,8 +151,7 @@ export class AccessibilityMapService {
       }
 
       // Helper to get nearby text (within 100px)
-      // Helper to get nearby text (within 100px)
-      function getNearbyText(el: Element, radius: number): string[] {
+      const getNearbyText = (el: Element, radius: number): string[] => {
         const rect = el.getBoundingClientRect()
         const centerX = rect.left + rect.width / 2
         const centerY = rect.top + rect.height / 2

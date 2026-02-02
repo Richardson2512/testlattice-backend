@@ -24,13 +24,18 @@ export interface ParentRunAIBudget {
 
 /**
  * Tier-aware AI budget limits
+ * Based on worst-case scenario analysis:
+ * - Guest: 25 steps × 1 retry = ~34k tokens
+ * - Starter: 40 steps × 1 retry = ~52k tokens  
+ * - Indie: 50 steps × 3 retries = ~78k tokens
+ * - Pro: 60 steps × 5 retries = ~105k tokens
  */
 export const TIER_AI_BUDGETS: Record<UserTier, { maxLLMCalls: number; maxVisionCalls: number }> = {
-  guest: { maxLLMCalls: 10, maxVisionCalls: 1 },
-  starter: { maxLLMCalls: 15, maxVisionCalls: 2 },
-  indie: { maxLLMCalls: 20, maxVisionCalls: 3 },
-  pro: { maxLLMCalls: 30, maxVisionCalls: 5 },
-  agency: { maxLLMCalls: 30, maxVisionCalls: 5 }, // Same as Pro
+  guest: { maxLLMCalls: 25, maxVisionCalls: 1 },
+  starter: { maxLLMCalls: 35, maxVisionCalls: 1 },
+  indie: { maxLLMCalls: 55, maxVisionCalls: 3 },
+  pro: { maxLLMCalls: 75, maxVisionCalls: 5 },
+  agency: { maxLLMCalls: 100, maxVisionCalls: 10 },
 }
 
 /**

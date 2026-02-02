@@ -48,8 +48,8 @@ export class UnifiedBrainService {
         const config: ModelConfig = {
             apiUrl: process.env.OPENAI_API_URL || 'https://api.openai.com/v1',
             apiKey: currentApiKey,
-            model: process.env.OPENAI_MODEL || 'gpt-5-mini',
-            temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '1'),
+            model: process.env.OPENAI_MODEL || 'gpt-5-mini-2025-08-07',
+            temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '1.0'),  // GPT-5-mini only supports temperature=1
             maxTokens: parseInt(process.env.OPENAI_MAX_TOKENS || '4096', 10),
             clientLabel,
         }

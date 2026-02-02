@@ -56,8 +56,8 @@ export const config = {
   openai: {
     apiUrl: optionalEnv("OPENAI_API_URL", "https://api.openai.com/v1"),
     apiKey: optionalEnv("OPENAI_API_KEY", ""),
-    model: process.env.OPENAI_MODEL || 'gpt-5-mini',
-    temperature: parseFloat(optionalEnv("OPENAI_TEMPERATURE", "1")),
+    model: process.env.OPENAI_MODEL || 'gpt-5-mini-2025-08-07',
+    temperature: parseFloat(optionalEnv("OPENAI_TEMPERATURE", "0.7")),
     maxTokens: parseInt(optionalEnv("OPENAI_MAX_TOKENS", "4096"), 10),
     orgId: optionalEnv("OPENAI_ORG_ID", ""),
   },

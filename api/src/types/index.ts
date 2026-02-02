@@ -93,6 +93,8 @@ export interface TestOptions {
   continuousPopupHandling?: boolean;
   // Registered user test options (multi-select)
   selectedTestTypes?: Array<'visual' | 'login' | 'signup' | 'navigation' | 'form' | 'accessibility' | 'rage_bait'>;
+  // Saved credential ID for login/signup tests (paid users)
+  credentialId?: string;
   // Guest test specific options (single select - SEPARATE FLOW)
   guestTestType?: 'login' | 'signup' | 'visual' | 'navigation' | 'form' | 'accessibility' | 'rage_bait';
   guestCredentials?: GuestCredentials;
@@ -139,6 +141,8 @@ export interface TestRun {
   currentStep?: number;
   diagnosis?: DiagnosisResult;
   diagnosisProgress?: DiagnosisProgress;
+  testabilityContract?: TestabilityContract; // NEW: Capability-focused diagnosis output
+  perTypeDiagnosis?: any; // NEW: Per-test-type can/cannot test results
   guestSessionId?: string;
   expiresAt?: string; // Expiration timestamp for guest test runs
   // Report sharing settings
@@ -200,6 +204,106 @@ export interface DiagnosisProgress {
   totalSubSteps: number;     // Total sub-steps in current main step
   subStepLabel?: string;     // Human-readable sub-step description
   percent: number;           // Overall progress 0-100
+}
+
+// ============================================================================
+// Testability Contract Types (NEW - replaces health-focused diagnosis)
+// ============================================================================
+
+export type TestType =
+  | 'login'
+  | 'signup'
+  | 'checkout'
+  | 'form_submission'
+  | 'navigation'
+  | 'search'
+  | 'data_entry'
+  | 'file_upload'
+  | 'custom'
+  | 'visual'
+  | 'accessibility'
+  | 'performance'
+  | 'payment'
+  | 'settings'
+  | 'logout'
+
+export interface TestabilityContract {
+  // Per test type analysis
+  testTypeAnalysis: TestTypeCapability[]
+
+  // Global blockers (apply to all tests)
+  globalBlockers: GlobalBlocker[]
+
+  // System actions (what we'll adapt)
+  systemActions: SystemAction[]
+
+  // Overall confidence
+  overallConfidence: 'high' | 'medium' | 'low'
+  confidenceReason: string
+
+  // What user must accept
+  riskAcceptance: RiskAcceptanceItem[]
+
+  // Can we proceed at all?
+  canProceed: boolean
+  proceedBlockedReason?: string
+
+  // Metadata
+  analyzedAt: string
+  duration: number
+  url: string
+  pageTitle: string
+}
+
+export interface TestTypeCapability {
+  testType: TestType
+
+  // ✅ Will work reliably
+  testable: {
+    elements: CapabilityItem[]
+    confidence: 'high' | 'medium'
+  }
+
+  // ⚠️ Might be flaky
+  conditionallyTestable: {
+    elements: CapabilityItem[]
+    conditions: string[]
+    confidence: 'medium' | 'low'
+  }
+
+  // ❌ Will not work
+  notTestable: {
+    elements: CapabilityItem[]
+    reasons: string[]
+  }
+}
+
+export interface CapabilityItem {
+  name: string
+  selector?: string
+  reason: string
+  elementType?: 'button' | 'input' | 'link' | 'select' | 'textarea' | 'form' | 'other'
+}
+
+export interface GlobalBlocker {
+  type: 'captcha' | 'mfa' | 'cross_origin_iframe' | 'native_dialog' | 'email_verification' | 'payment_gateway'
+  detected: boolean
+  location?: string
+  selector?: string
+  impact: string
+  severity: 'blocking' | 'warning'
+}
+
+export interface SystemAction {
+  action: 'skip_selector' | 'avoid_page' | 'downgrade_check' | 'use_fallback' | 'wait_extra'
+  target: string
+  reason: string
+}
+
+export interface RiskAcceptanceItem {
+  risk: string
+  impact: string
+  userMustAccept: boolean
 }
 
 export interface SelfHealingInfo {

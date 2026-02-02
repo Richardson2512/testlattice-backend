@@ -13,7 +13,7 @@ import { UnifiedPreflightService } from '../services/unifiedPreflightService'
 import { SuccessEvaluator } from '../services/successEvaluator'
 import { ContinuousPopupHandler } from '../services/continuousPopupHandler'
 import { IntelligentRetryLayer } from '../services/intelligentRetryLayer'
-import { ComprehensiveTestingService } from '../services/comprehensiveTesting'
+import { AuditService } from '../services/audit'
 import { RageBaitAnalyzer } from '../services/rageBaitAnalyzer'
 import { VerificationInputHandler } from '../services/verificationInputHandler'
 // import { PlaywrightRunner } from '../runners/playwright' // Needed for session?
@@ -48,7 +48,7 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
     private successEvaluator: SuccessEvaluator
     private popupHandler: ContinuousPopupHandler
     private retryLayer: IntelligentRetryLayer | null = null
-    private comprehensiveTesting: ComprehensiveTestingService
+    private auditService: AuditService
     private rageBaitAnalyzer: RageBaitAnalyzer | null = null
 
     // Logging
@@ -96,12 +96,12 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
             }
         }
 
-        this.comprehensiveTesting = new ComprehensiveTestingService()
+        this.auditService = new AuditService()
         this.successEvaluator = new SuccessEvaluator()
         this.popupHandler = new ContinuousPopupHandler()
 
         if (this.brain) {
-            this.contextSynthesizer = new ContextSynthesizer(this.brain, this.comprehensiveTesting)
+            this.contextSynthesizer = new ContextSynthesizer(this.brain, this.auditService)
             this.authAnalyzer = new AuthenticationFlowAnalyzer()
             this.actionExecutor = new ActionExecutor(this.deps.page)
             this.retryLayer = new IntelligentRetryLayer(
@@ -112,7 +112,7 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
             this.preflight = new UnifiedPreflightService(
                 this.brain,
                 this.contextSynthesizer,
-                this.comprehensiveTesting,
+                this.auditService,
                 (deps as any).runner || {}
             )
         } else {

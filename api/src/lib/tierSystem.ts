@@ -323,6 +323,14 @@ export async function getUserTier(userId?: string): Promise<UserTier> {
     // Import supabase here to avoid circular dependencies
     const { supabase } = await import('./supabase')
 
+    // ADMIN OVERRIDE: Hardcoded pro tier for admin accounts (by user ID)
+    // To find your user ID, check auth.users table in Supabase or use: supabase.auth.getUser()
+    const ADMIN_USER_IDS = process.env.ADMIN_USER_IDS?.split(',') || []
+    if (ADMIN_USER_IDS.includes(userId)) {
+      console.log(`[TierSystem] Admin override: ${userId} -> pro tier`)
+      return 'pro'
+    }
+
     const { data, error } = await supabase
       .from('user_subscriptions')
       .select('tier')

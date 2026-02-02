@@ -152,6 +152,8 @@ export interface TestOptions {
   browserMatrix?: Array<'chromium' | 'firefox' | 'webkit'>  // Defaults to ['chromium'] for cross-browser testing
   // Registered user test options (multi-select)
   selectedTestTypes?: Array<'visual' | 'login' | 'signup' | 'navigation' | 'form' | 'accessibility' | 'rage_bait'>
+  // Saved credential ID for login/signup tests (paid users - resolved by API before passing to worker)
+  credentialId?: string
   // Guest test options (handled by GuestTestProcessor)
   isGuestRun?: boolean
   guestTestType?: 'login' | 'signup' | 'visual' | 'navigation' | 'form' | 'accessibility' | 'rage_bait'

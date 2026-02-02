@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS test_runs (
   report_summary JSONB,
   findings JSONB,
   metadata JSONB,
+  testability_contract JSONB,
+  per_type_diagnosis JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -76,6 +78,8 @@ ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS visibility TEXT CHECK (visibility
 ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS report_summary JSONB;
 ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS findings JSONB;
 ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS metadata JSONB;
+ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS testability_contract JSONB;
+ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS per_type_diagnosis JSONB;
 
 -- ----------------------------------------------------------------------------
 -- Test Artifacts table

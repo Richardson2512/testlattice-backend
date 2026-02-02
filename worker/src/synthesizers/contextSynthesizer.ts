@@ -1,7 +1,7 @@
 // ContextSynthesizer: Prepares VisionContext and trackingInfo for LLM
 import { VisionContext, VisionElement, TestOptions, DiagnosisComponentInsight, ComprehensiveTestResults } from '../types'
 import { UnifiedBrainService } from '../services/unifiedBrainService'
-import { ComprehensiveTestingService } from '../services/comprehensiveTesting'
+import { AuditService } from '../services/audit'
 import { Page } from 'playwright'
 import {
   assertPreflightCompletedBeforeScreenshot,
@@ -18,7 +18,7 @@ export interface SynthesizeContextParams {
   visitedHrefs: Set<string>
   blockedSelectors: Set<string>
   isSelectorBlocked: (selector?: string | null) => boolean
-  comprehensiveTesting: ComprehensiveTestingService
+  auditService: AuditService
   playwrightRunner?: any
   appiumRunner?: any
   stepNumber: number
@@ -60,7 +60,7 @@ export interface TrackingInfo {
 export class ContextSynthesizer {
   constructor(
     private unifiedBrain: UnifiedBrainService,
-    private comprehensiveTesting: ComprehensiveTestingService
+    private auditService: AuditService
   ) { }
 
   /**
@@ -113,7 +113,7 @@ export class ContextSynthesizer {
         if (sessionData?.page) {
           // Initialize comprehensive testing if not already done
           if (stepNumber === 1) {
-            await this.comprehensiveTesting.initialize(sessionData.page)
+            await this.auditService.initialize(sessionData.page)
           }
 
           // Collect data at key steps (Step 1, or when forced by navigation/major state change)
@@ -123,26 +123,26 @@ export class ContextSynthesizer {
 
             // Collect each metric independently - if one fails, others still run
             const collectionPromises = [
-              this.comprehensiveTesting.collectPerformanceMetrics(sessionData.page).catch((err: any) => {
+              this.auditService.collectPerformanceMetrics(sessionData.page).catch((err: any) => {
                 console.warn(`[${runId}] Performance metrics collection failed:`, err.message)
                 return null
               }),
-              this.comprehensiveTesting.checkAccessibility(sessionData.page).catch((err: any) => {
+              this.auditService.checkAccessibility(sessionData.page).catch((err: any) => {
                 console.warn(`[${runId}] Accessibility check failed:`, err.message)
                 return null
               }),
-              this.comprehensiveTesting.analyzeDOMHealth(sessionData.page).catch((err: any) => {
+              this.auditService.analyzeDOMHealth(sessionData.page).catch((err: any) => {
                 console.warn(`[${runId}] DOM health analysis failed:`, err.message)
                 return null
               }),
-              this.comprehensiveTesting.detectVisualIssues(sessionData.page).catch((err: any) => {
+              this.auditService.detectVisualIssues(sessionData.page).catch((err: any) => {
                 console.warn(`[${runId}] Visual issues detection failed:`, err.message)
                 return null
               }),
             ]
 
             await Promise.all(collectionPromises)
-            comprehensiveData = this.comprehensiveTesting.getResults()
+            comprehensiveData = this.auditService.getResults()
             console.log(`[${runId}] [${browserType.toUpperCase()}] Step ${stepNumber}: Comprehensive data collected - ${comprehensiveData.consoleErrors.length} console errors, ${comprehensiveData.networkErrors.length} network errors`)
           }
         }

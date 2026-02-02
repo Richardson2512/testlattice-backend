@@ -59,7 +59,7 @@ import { PlaywrightRunner, RunnerSession } from '../runners/playwright'
 
 import { config } from '../config/env'
 import { formatErrorForStep } from '../utils/errorFormatter'
-import { ComprehensiveTestingService } from '../services/comprehensiveTesting'
+import { AuditService } from '../services/audit'
 import { FailureExplanationService } from '../services/failureExplanationService'
 import { AIThinkingBroadcaster } from '../services/aiThinkingBroadcaster'
 import { SelfHealingMemoryService } from '../services/selfHealingMemory'
@@ -73,6 +73,7 @@ import { ContextSynthesizer } from '../synthesizers/contextSynthesizer'
 import { TestExecutor } from '../executors/testExecutor'
 import { VisualDiffService } from '../services/visualDiff'
 import { AccessibilityMapService } from '../services/accessibilityMap'
+import { TestabilityAnalyzerService } from '../services/testabilityAnalyzer'
 import { VerificationService } from '../services/verificationService'
 import { EnhancedTestabilityService } from '../services/enhancedTestability'
 import { AnnotatedScreenshotService } from '../services/annotatedScreenshot'
@@ -128,7 +129,7 @@ export class TestProcessor {
 
   private redis: Redis
   private apiUrl: string
-  private comprehensiveTesting: ComprehensiveTestingService
+  private auditService: AuditService
   private testingStrategy: TestingStrategyService
   private visionValidator?: VisionValidatorService | null
   private visionValidatorInterval: number
@@ -144,6 +145,7 @@ export class TestProcessor {
   private enhancedTestabilityService: EnhancedTestabilityService
   private annotatedScreenshotService: AnnotatedScreenshotService
   private riskAnalysisService: RiskAnalysisService
+  private testabilityAnalyzer: TestabilityAnalyzerService
   private testDataStores: Map<string, TestDataStore> = new Map() // Phase 1: Stateful test data per run
   private unifiedPreflight: UnifiedPreflightService
   private failureExplanationService: FailureExplanationService | null = null
@@ -181,7 +183,8 @@ export class TestProcessor {
     // Use injected Redis or create new connection (backward compatible)
     this.redis = redis || new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
     this.apiUrl = config.api.url || process.env.API_URL || 'http://localhost:3001'
-    this.comprehensiveTesting = new ComprehensiveTestingService()
+    this.auditService = new AuditService()
+    this.testabilityAnalyzer = new TestabilityAnalyzerService()
     this.testingStrategy = new TestingStrategyService()
 
 
@@ -201,7 +204,7 @@ export class TestProcessor {
     // Initialize refactored services
 
     this.runLogger = new RunLogger(storageService, pineconeService, this.apiUrl)
-    this.contextSynthesizer = new ContextSynthesizer(unifiedBrain, this.comprehensiveTesting)
+    this.contextSynthesizer = new ContextSynthesizer(unifiedBrain, this.auditService)
     this.testExecutor = new TestExecutor(playwrightRunner, this.retryLayer)
     this.visualDiffService = new VisualDiffService(0.1) // 0.1 threshold for pixel comparison
 
@@ -215,7 +218,7 @@ export class TestProcessor {
     this.unifiedPreflight = new UnifiedPreflightService(
       unifiedBrain,
       this.contextSynthesizer,
-      this.comprehensiveTesting,
+      this.auditService,
       playwrightRunner
     )
     this.continuousPopupHandler = new ContinuousPopupHandler()
@@ -393,15 +396,23 @@ export class TestProcessor {
       enhancedTestabilityService: this.enhancedTestabilityService,
       verificationService: this.verificationService,
       riskAnalysisService: this.riskAnalysisService,
-      comprehensiveTesting: this.comprehensiveTesting,
+      auditService: this.auditService,
+      testabilityAnalyzer: this.testabilityAnalyzer,
 
       // State management delegates
       getTestDataStore: (runId: string) => this.getTestDataStore(runId),
       ensureDiagnosisActive: async (runId: string) => {
         const status = await this.redis.get(`test-run:${runId}:status`)
-        if (!status || status === TestRunStatus.CANCELLED || status === TestRunStatus.COMPLETED) {
+        // If no status set, this is the first call - initialize as DIAGNOSING
+        if (!status) {
+          await this.redis.set(`test-run:${runId}:status`, TestRunStatus.DIAGNOSING, 'EX', 3600)
+          return
+        }
+        // If cancelled or completed, throw error
+        if (status === TestRunStatus.CANCELLED || status === TestRunStatus.COMPLETED) {
           throw new DiagnosisCancelledError(`Diagnosis cancelled (status: ${status})`)
         }
+        // Refresh TTL for active diagnosis
         await this.redis.expire(`test-run:${runId}:status`, 3600)
       },
       updateDiagnosisProgress: async (runId: string, progress: DiagnosisProgress) => {
@@ -440,7 +451,8 @@ export class TestProcessor {
       runId,
       apiUrl: this.apiUrl,
       navigationDelayMs: 2000,
-      maxPages: (build.type as string) === 'site_scan' ? 10 : maxPages
+      maxPages: (build.type as string) === 'site_scan' ? 10 : maxPages,
+      selectedTestTypes: jobData.options?.selectedTestTypes as any[]  // Pass through for per-test-type diagnosis
     }
 
     // Initialize orchestrator with dependencies
@@ -450,13 +462,19 @@ export class TestProcessor {
 
     try {
       // Execute standard diagnosis flow
+      console.log(`[${runId}] Orchestrator.run() starting...`)
       return await orchestrator.run(jobData)
     } catch (error: any) {
       if (error instanceof DiagnosisCancelledError) {
         throw error
       }
-      console.error(`[${runId}] Diagnosis failed (falling back to auto):`, error)
-      return 'auto'
+      console.error(`[${runId}] ❌ Diagnosis orchestrator failed:`, {
+        message: error.message,
+        name: error.name,
+        stack: error.stack?.slice(0, 1000)
+      })
+      // Diagnosis is mandatory for paid users - re-throw the error
+      throw error
     }
   }
 
@@ -834,7 +852,8 @@ export class TestProcessor {
           session.page,
           build.url || '',
           runId,
-          build.url || ''
+          build.url || '',
+          session.id  // Pass sessionId for context synthesis
         )
 
         // Create preflight step
@@ -1216,7 +1235,7 @@ ${parsedInstructions.structuredPlan}
               visitedHrefs,
               blockedSelectors,
               isSelectorBlocked,
-              comprehensiveTesting: this.comprehensiveTesting,
+              auditService: this.auditService,
               playwrightRunner: this.playwrightRunner,
               appiumRunner: undefined,
               stepNumber,
@@ -2054,7 +2073,7 @@ ${parsedInstructions.structuredPlan}
                   : ''
 
                 // Get current comprehensive data (may be from previous step)
-                const currentComprehensiveData = comprehensiveData || this.comprehensiveTesting.getResults()
+                const currentComprehensiveData = comprehensiveData || this.auditService.getResults()
 
                 const explanation = await this.failureExplanationService.explainFailure({
                   domSnapshot,
@@ -2440,16 +2459,28 @@ ${parsedInstructions.structuredPlan}
 
     // Update comprehensive testing service with design spec and vision validator
     if (options && options.designSpec) {
-      this.comprehensiveTesting.setDesignSpec(options.designSpec)
+      this.auditService.setDesignSpec(options.designSpec)
     }
     if (this.visionValidator) {
-      this.comprehensiveTesting.setVisionValidator(this.visionValidator ?? null)
+      this.auditService.setVisionValidator(this.visionValidator ?? null)
     }
 
     // Fetch current status to decide what to do
     const fetch = (await import('node-fetch')).default
     const response = await fetch(`${this.apiUrl}/api/tests/${runId}`)
-    const testRunData = await response.json()
+    const testRunData = await response.json() as any
+
+    // Debug: Log the full response to understand the structure
+    console.log(`[${runId}] API response status: ${response.status}`)
+    if (!response.ok) {
+      console.error(`[${runId}] ❌ API error fetching test run:`, testRunData)
+    }
+    if (!testRunData.testRun) {
+      console.error(`[${runId}] ❌ testRun object missing from response:`, JSON.stringify(testRunData).slice(0, 500))
+    } else {
+      console.log(`[${runId}] Test run status from API: ${testRunData.testRun.status}`)
+    }
+
     const currentStatus = testRunData.testRun?.status
     const diagnosisData: DiagnosisResult | undefined = testRunData.testRun?.diagnosis
     const hasDiagnosis = !!diagnosisData
@@ -2488,40 +2519,53 @@ ${parsedInstructions.structuredPlan}
       page.blockedSelectors?.forEach(selector => registerBlockedSelector(selector, `diagnosis:${page.label || page.id}`))
     })
 
-    // If we are in early stage and haven't diagnosed yet, run diagnosis
-    // Unless monkey mode or specific override which skips diagnosis
+    // Diagnosis is MANDATORY for all paid users (starter, indie, pro, agency)
+    // It runs for web tests with a URL, unless monkey mode is enabled
+    const isPaidUser = userTier !== 'guest'
     const shouldRunDiagnosis =
+      isPaidUser &&
       build.type === BuildType.WEB &&
       Boolean(build.url) &&
       options?.testMode !== 'monkey'
 
     if (shouldRunDiagnosis) {
-      console.log(`[${runId}] Diagnosis conditions met. Status: ${currentStatus}, HasDiagnosis: ${hasDiagnosis}`)
+      console.log(`[${runId}] ✅ Diagnosis MANDATORY for tier: ${userTier}. Status: ${currentStatus}, HasDiagnosis: ${hasDiagnosis}`)
+    } else if (!isPaidUser) {
+      console.log(`[${runId}] ⏩ Diagnosis skipped (guest user). Tier: ${userTier}`)
     } else {
-      console.log(`[${runId}] Diagnosis skipped. Build: ${build.type}, URL: ${!!build.url}, Mode: ${options?.testMode}`)
+      console.log(`[${runId}] ⏩ Diagnosis skipped. Build: ${build.type}, URL: ${!!build.url}, Mode: ${options?.testMode}`)
     }
 
     if (
       shouldRunDiagnosis &&
       !hasDiagnosis &&
-      (currentStatus === TestRunStatus.QUEUED || currentStatus === TestRunStatus.PENDING)
+      (currentStatus === TestRunStatus.QUEUED || currentStatus === TestRunStatus.PENDING || currentStatus === TestRunStatus.DIAGNOSING)
     ) {
+      console.log(`[${runId}] ⚡ ENTERING DIAGNOSIS BLOCK - tier: ${userTier}, status: ${currentStatus}`)
       try {
+        console.log(`[${runId}] Calling runDiagnosis()...`)
         const decision = await this.runDiagnosis(jobData)
+        console.log(`[${runId}] ✅ Diagnosis complete, decision: ${decision}`)
         if (decision === 'wait') {
+          console.log(`[${runId}] Decision is 'wait' - returning to await approval`)
           return { success: true, steps: [], artifacts: [], stage: 'diagnosis' } as ProcessResult
         }
-      } catch (error) {
+        console.log(`[${runId}] Decision is 'auto' - proceeding to execution`)
+      } catch (error: any) {
         if (error instanceof DiagnosisCancelledError) {
           console.log(`[${runId}] Diagnosis cancelled by user. Exiting worker.`)
           return { success: true, steps: [], artifacts: [], stage: 'diagnosis' } as ProcessResult
         }
+        console.error(`[${runId}] ❌ DIAGNOSIS ERROR:`, error.message, error.stack?.slice(0, 500))
         throw error
       }
+    } else {
+      console.log(`[${runId}] ⏩ Skipping diagnosis block - shouldRunDiagnosis: ${shouldRunDiagnosis}, hasDiagnosis: ${hasDiagnosis}, status: ${currentStatus}`)
     }
 
-    // If waiting approval/diagnosing, we shouldn't proceed
-    if (currentStatus === TestRunStatus.WAITING_APPROVAL || currentStatus === TestRunStatus.DIAGNOSING) {
+    // If waiting approval, we shouldn't proceed to execution
+    // Note: DIAGNOSING status means diagnosis should run (handled above), not exit here
+    if (currentStatus === TestRunStatus.WAITING_APPROVAL) {
       console.log(`[${runId}] Test is in ${currentStatus} state. Exiting worker.`)
       return { success: true, steps: [], artifacts: [], stage: 'diagnosis' } as ProcessResult
     }

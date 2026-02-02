@@ -123,6 +123,17 @@ export class PlaywrightRunner {
       }
     })
 
+    // CRITICAL: Add __name polyfill for tsx/esbuild bundler compatibility
+    // The bundler adds __name() calls to functions, but this helper doesn't exist in browser context
+    await page.addInitScript(() => {
+      if (typeof (window as any).__name === 'undefined') {
+        (window as any).__name = (fn: any, name: string) => {
+          try { Object.defineProperty(fn, 'name', { value: name, configurable: true }) } catch { }
+          return fn
+        }
+      }
+    })
+
     // Inject visual cursor and click indicator script for video recording
     await page.addInitScript(() => {
       // Create cursor element
@@ -530,9 +541,9 @@ export class PlaywrightRunner {
           validateUrlOrThrow(action.value)
 
           console.log('Playwright: Navigating to:', action.value)
-          // Use provided options or defaults
-          const timeout = options?.timeout || 30000
-          const waitUntil = options?.waitUntil || 'load'
+          // Use provided options or defaults (increased for slow sites, domcontentloaded is faster)
+          const timeout = options?.timeout || 60000
+          const waitUntil = options?.waitUntil || 'domcontentloaded'
 
           try {
             await page.goto(action.value, { waitUntil, timeout })
