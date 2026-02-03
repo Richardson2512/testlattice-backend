@@ -2,7 +2,7 @@
 import { FastifyInstance } from 'fastify'
 import { CreateTestRunRequest, TestRunStatus, TestRun, TestArtifact } from '../types'
 import { Database } from '../lib/db'
-import { enqueueTestRun } from '../lib/queue'
+import { enqueueTestRun, enqueueGuestTestRun } from '../lib/queue'
 import { authenticate, AuthenticatedRequest, optionalAuth } from '../middleware/auth'
 import { getTestControlWS } from '../index'
 import { createClient } from '@supabase/supabase-js'
@@ -60,9 +60,38 @@ export async function testRoutes(fastify: FastifyInstance) {
         throw updateError
       }
 
-      // Also trigger usage increment for each claimed test to respect quotas?
-      // Policy: We won't retroactively fail them, but we should count them if they happened this month.
-      // For simplicity in this iteration, we just claim ownership. usage triggers on creation.
+      // Increment usage count for each claimed test
+      // This ensures guest tests count toward the 3/month limit for free users
+      const claimedCount = tests.length
+      if (claimedCount > 0) {
+        // Try RPC for atomic increment first
+        const { error: rpcError } = await supabase.rpc('increment_tests_used', {
+          p_user_id: userId,
+          p_count: claimedCount
+        })
+
+        if (rpcError) {
+          // Fallback: upsert to create/update the row
+          const { error: upsertError } = await supabase
+            .from('user_subscriptions')
+            .upsert({
+              user_id: userId,
+              tier: 'free',
+              tests_used_this_month: claimedCount,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'user_id', ignoreDuplicates: false })
+            .select()
+
+          if (upsertError) {
+            fastify.log.warn({ error: upsertError }, 'Failed to update usage count for claimed tests')
+          } else {
+            fastify.log.info({ userId, claimedCount }, 'Updated usage count for claimed guest tests (upsert)')
+          }
+        } else {
+          fastify.log.info({ userId, claimedCount }, 'Incremented usage count for claimed guest tests')
+        }
+      }
 
       return reply.send({
         success: true,
@@ -255,20 +284,35 @@ export async function testRoutes(fastify: FastifyInstance) {
         },
       }, request.user?.id) // Pass authenticated user ID
 
-      // Enqueue job
+      // Enqueue job - Route based on tier
+      // Free users use guest queue (same processor as guests)
+      // Paid users use main test queue (with diagnosis)
       try {
-        await enqueueTestRun({
-          runId: testRun.id,
-          projectId: targetProjectId,
-          build,
-          profile,
-          options: normalizedOptions,
-          userTier, // Explicitly pass tier to worker
-        })
+        if (userTier === 'free') {
+          // Free users: Use guest processor (no diagnosis, step-based)
+          await enqueueGuestTestRun({
+            runId: testRun.id,
+            projectId: targetProjectId,
+            build,
+            profile,
+            options: { ...normalizedOptions, isGuestRun: true },
+            userTier,
+          })
+        } else {
+          // Paid users (starter, indie, pro, agency): Use main processor with diagnosis
+          await enqueueTestRun({
+            runId: testRun.id,
+            projectId: targetProjectId,
+            build,
+            profile,
+            options: normalizedOptions,
+            userTier,
+          })
+        }
 
         // Update status after successful enqueue
         // Paid users (starter, indie, pro, agency) start in DIAGNOSING to show diagnosis page immediately
-        // Free/Guest users would start in QUEUED (though they use guest flow)
+        // Free users start in QUEUED (use guest flow)
         const isPaidTier = userTier !== 'guest' && userTier !== 'free'
         const initialStatus = isPaidTier ? TestRunStatus.DIAGNOSING : TestRunStatus.QUEUED
 

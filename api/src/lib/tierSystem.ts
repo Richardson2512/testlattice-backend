@@ -98,7 +98,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
       seo: false,
       visualRegression: false,
     },
-    retentionDays: 0, // No history for free tier
+    retentionDays: 2, // Same as guest (48h)
   },
   starter: {
     maxSteps: Infinity, // Changed from 25 to Infinity (dynamic based on diagnosis)
