@@ -285,7 +285,9 @@ export class TestProcessor {
   }> {
     try {
       const fetch = (await import('node-fetch')).default
-      const response = await fetch(`${this.apiUrl}/api/tests/${runId}`)
+      const response = await fetch(`${this.apiUrl}/api/tests/${runId}`, {
+        headers: { 'x-internal-worker': 'true' }
+      })
       if (!response.ok) {
         return { status: null, paused: false }
       }
@@ -1801,7 +1803,9 @@ ${parsedInstructions.structuredPlan}
                 try {
                   // Fetch baseline screenshot from previous run
                   const fetch = (await import('node-fetch')).default
-                  const baselineResponse = await fetch(`${this.apiUrl}/api/tests/${options.baselineRunId}`)
+                  const baselineResponse = await fetch(`${this.apiUrl}/api/tests/${options.baselineRunId}`, {
+                    headers: { 'x-internal-worker': 'true' }
+                  })
                   const baselineData = await baselineResponse.json()
 
                   // Find matching step in baseline (same step number, browser, viewport)
@@ -2467,7 +2471,9 @@ ${parsedInstructions.structuredPlan}
 
     // Fetch current status to decide what to do
     const fetch = (await import('node-fetch')).default
-    const response = await fetch(`${this.apiUrl}/api/tests/${runId}`)
+    const response = await fetch(`${this.apiUrl}/api/tests/${runId}`, {
+      headers: { 'x-internal-worker': 'true' }
+    })
     const testRunData = await response.json() as any
 
     // Debug: Log the full response to understand the structure
