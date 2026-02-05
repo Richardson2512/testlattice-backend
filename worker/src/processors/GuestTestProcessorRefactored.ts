@@ -74,7 +74,7 @@ export class GuestTestProcessorRefactored extends BaseProcessor {
         this.sessionId = deps.sessionId
         this.brain = deps.brain
         this.actionExecutor = new ActionExecutor(deps.page)
-        this.logEmitter = getExecutionLogEmitter(this.runId)
+        this.logEmitter = getExecutionLogEmitter(this.runId, 0)
 
         // Patch logEmitter to broadcast logs to Frontend via Redis
         const originalLog = this.logEmitter.log.bind(this.logEmitter)
