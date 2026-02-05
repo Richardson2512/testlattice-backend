@@ -20,7 +20,7 @@ if (process.env.NODE_ENV !== 'production') {
     console.log('✅ .env file loaded successfully')
   }
   console.log('SUPABASE_URL:', process.env.SUPABASE_URL ? '✅ Set' : '❌ Missing')
-  console.log('SUPABASE_ANON_KEY:', process.env.SUPABASE_KEY ? '✅ Set' : '❌ Missing')
+  console.log('SUPABASE_ANON_KEY:', (process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY) ? '✅ Set' : '❌ Missing')
   console.log('SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅ Set' : '❌ Missing')
   console.log('SENTRY_DSN:', process.env.SENTRY_DSN ? '✅ Set' : '❌ Missing')
   if (process.env.SENTRY_DSN) {

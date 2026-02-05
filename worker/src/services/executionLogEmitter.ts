@@ -1,89 +1,103 @@
 /**
- * ExecutionLogEmitter - First-class execution logging system
- * 
- * Execution logs are NOT debug logs. They are a PRODUCT FEATURE.
- * 
- * Rules:
- * - Every meaningful action MUST log intent
- * - No silent steps
- * - No swallowed transitions
- * - Logs are user-visible and persisted with test runs
+ * ExecutionLogEmitter - Captures and emits step execution logs
+ * Used by AI execution calls to track and persist execution logs
  */
 
-export interface ExecutionLogEntry {
-  timestamp: string
-  message: string
-  metadata?: Record<string, any>
-  context?: string
-  stepNumber?: number
+interface ExecutionLog {
+    timestamp: string
+    type: 'info' | 'warn' | 'error' | 'debug'
+    message: string
+    data?: any
 }
 
-export interface ExecutionLogEmitter {
-  log(message: string, metadata?: Record<string, any>): void
-  getLogs(): ExecutionLogEntry[]
-  clear(): void
-}
+class ExecutionLogEmitter {
+    private runId: string
+    private stepNumber: number
+    private logs: ExecutionLog[] = []
 
-/**
- * In-memory execution log emitter
- * Logs are persisted via the test run's step metadata
- */
-export class MemoryExecutionLogEmitter implements ExecutionLogEmitter {
-  private logs: ExecutionLogEntry[] = []
-  private runId: string
-  private stepNumber?: number
-
-  constructor(runId: string, stepNumber?: number) {
-    this.runId = runId
-    this.stepNumber = stepNumber
-  }
-
-  log(message: string, metadata?: Record<string, any>): void {
-    const entry: ExecutionLogEntry = {
-      timestamp: new Date().toISOString(),
-      message,
-      metadata,
-      context: this.runId,
-      stepNumber: this.stepNumber,
+    constructor(runId: string, stepNumber: number) {
+        this.runId = runId
+        this.stepNumber = stepNumber
     }
-    this.logs.push(entry)
-    
-    // Also emit to console for immediate visibility
-    const metadataStr = metadata ? ` ${JSON.stringify(metadata)}` : ''
-    console.log(`[ExecutionLog] [${this.runId}]${this.stepNumber ? ` [Step ${this.stepNumber}]` : ''} ${message}${metadataStr}`)
-  }
 
-  getLogs(): ExecutionLogEntry[] {
-    return [...this.logs]
-  }
+    log(message: string, data?: any): void {
+        this.logs.push({
+            timestamp: new Date().toISOString(),
+            type: 'info',
+            message,
+            data
+        })
+    }
 
-  clear(): void {
-    this.logs = []
-  }
+    warn(message: string, data?: any): void {
+        this.logs.push({
+            timestamp: new Date().toISOString(),
+            type: 'warn',
+            message,
+            data
+        })
+    }
 
-  setStepNumber(stepNumber: number): void {
-    this.stepNumber = stepNumber
-  }
+    error(message: string, data?: any): void {
+        this.logs.push({
+            timestamp: new Date().toISOString(),
+            type: 'error',
+            message,
+            data
+        })
+    }
+
+    debug(message: string, data?: any): void {
+        this.logs.push({
+            timestamp: new Date().toISOString(),
+            type: 'debug',
+            message,
+            data
+        })
+    }
+
+    getLogs(): ExecutionLog[] {
+        return [...this.logs]
+    }
+
+    clear(): void {
+        this.logs = []
+    }
+}
+
+// Cache emitters by runId-stepNumber to avoid recreating
+const emitterCache = new Map<string, ExecutionLogEmitter>()
+
+/**
+ * Get or create an execution log emitter for a specific run and step
+ */
+export function getExecutionLogEmitter(runId: string, stepNumber: number): ExecutionLogEmitter {
+    const key = `${runId}-${stepNumber}`
+
+    if (!emitterCache.has(key)) {
+        emitterCache.set(key, new ExecutionLogEmitter(runId, stepNumber))
+    }
+
+    return emitterCache.get(key)!
 }
 
 /**
- * Global execution log emitter factory
- * Creates emitters scoped to test runs
+ * Clear cached emitter for a run-step (cleanup after step completion)
  */
-const executionLogEmitters = new Map<string, MemoryExecutionLogEmitter>()
-
-export function getExecutionLogEmitter(runId: string, stepNumber?: number): ExecutionLogEmitter {
-  if (!executionLogEmitters.has(runId)) {
-    executionLogEmitters.set(runId, new MemoryExecutionLogEmitter(runId, stepNumber))
-  }
-  const emitter = executionLogEmitters.get(runId)!
-  if (stepNumber !== undefined) {
-    emitter.setStepNumber(stepNumber)
-  }
-  return emitter
+export function clearExecutionLogEmitter(runId: string, stepNumber: number): void {
+    const key = `${runId}-${stepNumber}`
+    emitterCache.delete(key)
 }
 
-export function clearExecutionLogEmitter(runId: string): void {
-  executionLogEmitters.delete(runId)
+/**
+ * Clear all cached emitters for a run (cleanup after run completion)
+ */
+export function clearAllEmittersForRun(runId: string): void {
+    for (const key of emitterCache.keys()) {
+        if (key.startsWith(`${runId}-`)) {
+            emitterCache.delete(key)
+        }
+    }
 }
 
+export { ExecutionLogEmitter, ExecutionLog }

@@ -1,30 +1,36 @@
-/**
- * DiagnosisOrchestrator
- * Orchestrates the UI Diagnosis flow for Registered tests
- * Handles testability analysis, multi-page crawl, and approval workflow
- */
-
-import { Page } from 'playwright'
 import {
-    VisionContext,
-    DiagnosisResult,
-    DiagnosisPageSummary,
-    DiagnosisProgress,
     JobData,
     BuildType,
-    TestRunStatus
+    TestRunStatus,
+    VisionContext,
+    DiagnosisPageSummary,
+    DiagnosisResult,
 } from '../../../types'
-import { logger } from '../../../observability'
-import { DiagnosisCrawler, DiagnosisCrawlerConfig, DiagnosisCrawlerDependencies } from '../diagnosis/DiagnosisCrawler'
-import { DiagnosisCancelledError } from '../../types'
+import { logger } from '../../../utils/logger'
+import { Page } from 'playwright'
+import { DiagnosisCrawler, DiagnosisCrawlerDependencies } from './DiagnosisCrawler'
+import { DiagnosisCancelledError } from '../../../errors'
 import {
+    TestabilityAnalyzerService,
     TestabilityContract,
-    TestabilityContractInput,
-    ITestabilityAnalyzer,
-    TestType,
     FrontendTestType,
+    TEST_TYPE_MAPPINGS
 } from '../../../services/testabilityAnalyzer'
 import { DiagnosisByTestType, AggregatedDiagnosis } from '../../../services/diagnosis'
+import Redis from 'ioredis'
+import { ProgressTracker, ProgressPhase } from '../../../services/ProgressTracker'
+
+// Diagnosis Phases with relative execution weights
+const DIAGNOSIS_PHASES: ProgressPhase[] = [
+    { id: 'init', label: 'Initializing browser session', weight: 5 },
+    { id: 'navigate', label: 'Loading page', weight: 15 },
+    { id: 'screenshot', label: 'Capturing screenshots', weight: 20 },
+    { id: 'per_type', label: 'Running specialized diagnosis', weight: 10 },
+    { id: 'ai_analysis', label: 'Running AI analysis', weight: 30 }, // Heavy weight for 26s call
+    { id: 'contract', label: 'Generating testability contract', weight: 10 },
+    { id: 'verify', label: 'Verifying test plans', weight: 10 },
+    { id: 'complete', label: 'Diagnosis complete', weight: 0 }
+]
 
 // ============================================================================
 // Configuration
@@ -33,100 +39,51 @@ import { DiagnosisByTestType, AggregatedDiagnosis } from '../../../services/diag
 export interface DiagnosisOrchestratorConfig {
     runId: string
     apiUrl: string
-    navigationDelayMs: number
     maxPages: number
-    selectedTestTypes?: FrontendTestType[]  // Frontend test types to diagnose
+    navigationDelayMs: number
 }
 
-// ============================================================================
-// Dependencies (injected from TestProcessor)
-// ============================================================================
-
-export interface DiagnosisOrchestratorDependencies {
-    // Browser control
-    playwrightRunner: {
-        reserveSession: (profile: any) => Promise<{ id: string; page: Page }>
-        releaseSession: (sessionId: string) => Promise<any>
-        executeAction: (sessionId: string, action: any) => Promise<any>
-        captureScreenshot: (sessionId: string, fullPage: boolean) => Promise<string>
-        getDOMSnapshot: (sessionId: string) => Promise<string>
-        getPageDimensions: (sessionId: string) => Promise<{ viewportHeight: number; documentHeight: number }>
-        scrollToTop: (sessionId: string) => Promise<void>
-        scrollToPosition: (sessionId: string, y: number) => Promise<void>
-        getCurrentUrl: (sessionId: string) => Promise<string>
-        getSession: (sessionId: string) => { page: Page } | null | undefined
-    }
-
-    // Services
-    unifiedBrain: {
-        analyzeScreenshot: (screenshot: string, dom: string, mode: string) => Promise<VisionContext>
-        analyzePageTestability: (context: VisionContext) => Promise<any>
-    }
-    // NEW: Testability analyzer for contract generation
-    testabilityAnalyzer?: ITestabilityAnalyzer
-
-    // DEPRECATED: Comprehensive testing (kept for backward compatibility, will be removed)
-    auditService?: {
-        initialize: (page: Page) => Promise<any>
-        collectPerformanceMetrics: (page: Page) => Promise<any>
-        checkAccessibility: (page: Page) => Promise<any>
-        analyzeDOMHealth: (page: Page) => Promise<any>
-        detectVisualIssues: (page: Page) => Promise<any>
-        checkSecurity: (page: Page) => Promise<any>
-        checkSEO: (page: Page) => Promise<any>
-        analyzeThirdPartyDependencies: (page: Page) => Promise<any>
-        getResults: () => any
-    }
-    accessibilityMapService: {
-        createAccessibilityMap: (page: Page) => Promise<any>
-        convertToVisionElements: (map: any) => any[]
-    }
-    annotatedScreenshotService: {
-        createAnnotatedScreenshotWithMap: (page: Page, map: any) => Promise<{ screenshot: Buffer; elementMap: any[] }>
-    }
-    enhancedTestabilityService: {
-        assessTestability: (flows: any[], map: any, page: Page, onLowConfidence: any) => Promise<any>
-    }
-    verificationService: {
-        verifyTestPlan: (plans: any[], map: any, page: Page, store: any, instructions: any) => Promise<any>
-    }
-    riskAnalysisService: {
-        analyzeRisks: (plans: any, page: Page) => Promise<any>
-    }
-    storageService: {
-        uploadScreenshot: (runId: string, stepNumber: number, buffer: Buffer) => Promise<string>
-    }
-
-    // State management
-    getTestDataStore: (runId: string) => any
-    ensureDiagnosisActive: (runId: string) => Promise<void>
-    updateDiagnosisProgress: (runId: string, progress: DiagnosisProgress) => Promise<void>
-    getPageTitle: (session: any) => Promise<string | undefined>
-
-    // Aggregation utilities
-    aggregateDiagnosisPages: (pages: DiagnosisPageSummary[]) => DiagnosisResult
-    evaluateApprovalDecision: (jobData: JobData, diagnosis: DiagnosisResult) => 'auto' | 'wait'
-    notifyDiagnosisPending: (runId: string, jobData: JobData, diagnosis: DiagnosisResult) => Promise<void>
-    buildDiagnosisPageSummary: (params: any) => DiagnosisPageSummary
-    normalizeUrl: (url: string) => string
-}
-
-// ============================================================================
-// Result Types
-// ============================================================================
+// Local types not exported globally
+export type TestType = FrontendTestType // Alias for consistency
 
 export interface DiagnosisSnapshotResult {
     context: VisionContext
     analysis: DiagnosisResult
     screenshotUrl?: string
-    screenshotUrls?: string[]
+    screenshotUrls: string[]
     comprehensiveTests?: any
-    perTypeDiagnosis?: AggregatedDiagnosis  // Per-test-type can/cannot test results
+    perTypeDiagnosis?: AggregatedDiagnosis
 }
 
-// ============================================================================
-// DiagnosisOrchestrator Class
-// ============================================================================
+export interface DiagnosisOrchestratorDependencies {
+    unifiedBrain: any
+    playwrightRunner: any
+    storageService: any
+    accessibilityMapService: any
+    annotatedScreenshotService: any
+    enhancedTestabilityService: any
+    verificationService: any
+    riskAnalysisService: any
+    redis: Redis
+    auditService: any
+    testabilityAnalyzer: TestabilityAnalyzerService
+
+    getTestDataStore: (runId: string) => any
+    ensureDiagnosisActive: (runId: string) => Promise<void>
+    getPageTitle: (session: any) => Promise<string | undefined>
+    normalizeUrl: (url: string) => string
+    buildDiagnosisPageSummary: (params: any) => DiagnosisPageSummary
+    aggregateDiagnosisPages: (pages: DiagnosisPageSummary[]) => DiagnosisResult
+    evaluateApprovalDecision: (jobData: JobData, diagnosis: DiagnosisResult) => 'auto' | 'wait'
+    notifyDiagnosisPending: (runId: string, jobData: JobData, diagnosis: DiagnosisResult) => Promise<void>
+    updateDiagnosisProgress: (runId: string, progress: any) => Promise<void>
+}
+
+export interface DiagnosisSnippet {
+    // Legacy support if needed, or remove
+    id: string
+}
+
 
 export class DiagnosisOrchestrator {
     private config: DiagnosisOrchestratorConfig
@@ -156,48 +113,34 @@ export class DiagnosisOrchestrator {
         const isMultiPage = maxPages > 1
         const totalSteps = isMultiPage ? 6 : 5
 
+        // Initialize Progress Tracker
+        const tracker = new ProgressTracker(
+            runId,
+            DIAGNOSIS_PHASES,
+            this.deps.redis,
+            this.deps.updateDiagnosisProgress
+        )
+
         try {
             // STEP 1: Initialize
-            await this.deps.updateDiagnosisProgress(runId, {
-                step: 1,
-                totalSteps,
-                stepLabel: 'Initializing secure browser session',
-                subStep: 1,
-                totalSubSteps: 2,
-                subStepLabel: 'Reserving browser instance',
-                percent: 5,
-            })
+            await tracker.startPhase('init', 'Reserving browser instance')
 
             session = await this.deps.playwrightRunner.reserveSession(profile)
 
-            await this.deps.updateDiagnosisProgress(runId, {
-                step: 1,
-                totalSteps,
-                stepLabel: 'Session ready',
-                subStep: 2,
-                totalSubSteps: 2,
-                subStepLabel: 'Session ready',
-                percent: 10,
-            })
+            await tracker.updateSubPhase('Session ready')
+            await tracker.completePhase('init')
 
             // Update status to DIAGNOSING
             await this.updateTestStatus(runId, TestRunStatus.DIAGNOSING)
             await this.deps.ensureDiagnosisActive(runId)
 
-            // STEP 2: Navigate (with resilient error handling)
-            await this.deps.updateDiagnosisProgress(runId, {
-                step: 2,
-                totalSteps,
-                stepLabel: `Loading ${build.url}`,
-                subStep: 1,
-                totalSubSteps: 2,
-                subStepLabel: 'Navigating to URL',
-                percent: 15,
-            })
+            // STEP 2: Navigate
+            await tracker.startPhase('navigate', `Navigating to ${build.url}`)
 
             // Resilient navigation - catch errors and flag them instead of failing
             let navigationError: Error | null = null
             try {
+                if (!session) throw new Error('Session not initialized')
                 await this.deps.playwrightRunner.executeAction(session.id, {
                     action: 'navigate',
                     value: build.url,
@@ -239,15 +182,8 @@ export class DiagnosisOrchestrator {
                 }
 
                 // Update progress to show error was captured
-                await this.deps.updateDiagnosisProgress(runId, {
-                    step: totalSteps,
-                    totalSteps,
-                    stepLabel: 'Navigation issue detected - awaiting review',
-                    subStep: 1,
-                    totalSubSteps: 1,
-                    subStepLabel: 'Error flagged',
-                    percent: 100,
-                })
+                await tracker.startPhase('complete', 'Navigation issue detected - awaiting review')
+                await tracker.completePhase('complete')
 
                 // Update test with partial diagnosis (error flagged as critical finding)
                 await this.updateTestWithDiagnosis(runId, errorDiagnosis, 'wait', null, null)
@@ -257,55 +193,51 @@ export class DiagnosisOrchestrator {
                 return 'wait'  // Return to user for review instead of failing
             }
 
-            await this.deps.updateDiagnosisProgress(runId, {
-                step: 2,
-                totalSteps,
-                stepLabel: 'Page loaded successfully',
-                subStep: 2,
-                totalSubSteps: 2,
-                subStepLabel: 'Page loaded',
-                percent: 25,
-            })
+            await tracker.completePhase('navigate')
 
             await this.deps.ensureDiagnosisActive(runId)
 
-            // STEP 3: Capture
-            const baseSnapshot = await this.captureDiagnosisSnapshot({
-                sessionId: session.id,
-                pageIndex: 0,
-                upload: true,
-                onProgress: (progress) => {
-                    const scanProgress = 30 + (progress.current / progress.total) * 20
-                    this.deps.updateDiagnosisProgress(runId, {
-                        step: 3,
-                        totalSteps,
-                        stepLabel: `Capturing screenshot ${progress.current}/${progress.total}`,
-                        subStep: progress.current,
-                        totalSubSteps: progress.total,
-                        subStepLabel: `Position ${progress.position}px`,
-                        percent: Math.min(50, Math.floor(scanProgress)),
-                    }).catch(() => { })
-                }
-            })
+            // Capture snapshot (handles screenshot, per-type, AI analysis phases)
+            if (!session) throw new Error('Session lost before capture')
+            const baseSnapshot = await this.captureDiagnosisSnapshot(
+                {
+                    sessionId: session.id,
+                    pageIndex: 0,
+                    upload: true,
+                },
+                tracker
+            )
 
-            // Generate Testability Contract (NEW)
+            // STEP 4: Generate Testability Contract
+            await tracker.startPhase('contract', 'Analyzing page structure')
+
             let testabilityContract: TestabilityContract | null = null
             if (this.deps.testabilityAnalyzer && session) {
                 try {
-                    const selectedTestTypes = (jobData.options?.selectedTestTypes || ['navigation']) as TestType[]
+                    const frontendTestTypes = (jobData.options?.selectedTestTypes || ['navigation']) as FrontendTestType[]
+                    // Map frontend simplified types to backend granular types
+                    const backendTestTypes = frontendTestTypes.flatMap(type => TEST_TYPE_MAPPINGS[type] || [])
+
                     testabilityContract = await this.deps.testabilityAnalyzer.generateContract(
                         {
                             urls: [build.url],
-                            selectedTestTypes,
+                            selectedTestTypes: backendTestTypes,
                             executionMode: isMultiPage ? 'multi-page' : 'single',
                         },
                         session.page
                     )
                     logger.info({ runId, confidence: testabilityContract.overallConfidence }, 'Testability contract generated')
+
+                    await tracker.updateSubPhase('Contract generated')
                 } catch (error: any) {
                     logger.warn({ runId, error: error.message }, 'Testability contract generation failed')
                 }
             }
+
+            await tracker.completePhase('contract')
+
+            // STEP 5: Verification & Aggregation
+            await tracker.startPhase('verify', 'Building page summary')
 
             const currentUrl = await this.deps.playwrightRunner.getCurrentUrl(session.id).catch(() => build.url)
             const visitedUrls = new Set<string>()
@@ -319,7 +251,7 @@ export class DiagnosisOrchestrator {
                     label: 'Landing page',
                     url: currentUrl || build.url,
                     action: 'Initial view',
-                    title: await this.deps.getPageTitle(session),
+                    title: session ? await this.deps.getPageTitle(session) : 'Unknown',
                     screenshotUrl: baseSnapshot.screenshotUrl,
                     screenshotUrls: baseSnapshot.screenshotUrls,
                     diagnosis: baseSnapshot.analysis,
@@ -337,7 +269,7 @@ export class DiagnosisOrchestrator {
                         maxPages,
                         navigationDelayMs: this.config.navigationDelayMs,
                     },
-                    this.buildCrawlerDeps(session)
+                    this.buildCrawlerDeps(session!, tracker)
                 )
 
                 const crawlPages = await crawler.crawl(
@@ -349,18 +281,14 @@ export class DiagnosisOrchestrator {
             }
 
             // Aggregate and finalize
+            await tracker.updateSubPhase('Aggregating results')
+
             const aggregatedDiagnosis = this.deps.aggregateDiagnosisPages(pageSummaries)
             const decision = this.deps.evaluateApprovalDecision(jobData, aggregatedDiagnosis)
 
-            await this.deps.updateDiagnosisProgress(runId, {
-                step: totalSteps,
-                totalSteps,
-                stepLabel: decision === 'wait' ? 'Awaiting approval' : 'Auto-approved',
-                subStep: 1,
-                totalSubSteps: 1,
-                subStepLabel: 'Complete',
-                percent: 100,
-            })
+            await tracker.completePhase('verify')
+            await tracker.startPhase('complete', decision === 'wait' ? 'Awaiting approval' : 'Auto-approved')
+            await tracker.completePhase('complete')
 
             // Update with diagnosis results (including per-test-type can/cannot)
             await this.updateTestWithDiagnosis(runId, aggregatedDiagnosis, decision, testabilityContract, baseSnapshot.perTypeDiagnosis)
@@ -391,16 +319,21 @@ export class DiagnosisOrchestrator {
     /**
      * Capture diagnosis snapshot (screenshots, accessibility, analysis)
      */
-    private async captureDiagnosisSnapshot(params: {
-        sessionId: string
-        pageIndex: number
-        upload: boolean
-        onProgress?: (progress: { current: number; total: number; position: number }) => void
-    }): Promise<DiagnosisSnapshotResult> {
+    private async captureDiagnosisSnapshot(
+        params: {
+            sessionId: string
+            pageIndex: number
+            upload: boolean
+        },
+        tracker?: ProgressTracker // Optional to support existing crawler usage without refactoring crawler yet
+    ): Promise<DiagnosisSnapshotResult> {
         const { runId } = this.config
-        const { sessionId, pageIndex, upload, onProgress } = params
+        const { sessionId, pageIndex, upload } = params
 
         await this.deps.ensureDiagnosisActive(runId)
+
+        // START SCREENSHOT PHASE
+        if (tracker) await tracker.startPhase('screenshot')
 
         // Get page dimensions
         const dimensions = await this.deps.playwrightRunner.getPageDimensions(sessionId)
@@ -422,8 +355,8 @@ export class DiagnosisOrchestrator {
             const scrollY = Math.min(i * scrollIncrement, Math.max(0, documentHeight - viewportHeight))
             await this.deps.playwrightRunner.scrollToPosition(sessionId, scrollY)
 
-            if (onProgress) {
-                onProgress({ current: i + 1, total: totalScrollPositions, position: scrollY })
+            if (tracker) {
+                await tracker.updateSubPhase(`Capturing screenshot ${i + 1}/${totalScrollPositions}`, i + 1, totalScrollPositions)
             }
 
             const screenshot = await this.deps.playwrightRunner.captureScreenshot(sessionId, false)
@@ -432,6 +365,8 @@ export class DiagnosisOrchestrator {
 
         await this.deps.playwrightRunner.scrollToTop(sessionId)
         await this.delay(200)
+
+        if (tracker) await tracker.completePhase('screenshot')
 
         // Get DOM and session
         const domSnapshot = await this.deps.playwrightRunner.getDOMSnapshot(sessionId)
@@ -461,7 +396,9 @@ export class DiagnosisOrchestrator {
             },
         }
 
-        // Run per-test-type diagnosis (steps add up based on selected types)
+        // Run per-test-type diagnosis
+        if (tracker) await tracker.startPhase('per_type')
+
         // Get selectedTestTypes from job data or default to navigation
         const selectedTestTypes = (this.config as any).selectedTestTypes as FrontendTestType[] || ['navigation']
         logger.info({ runId, selectedTestTypes }, `Running per-test-type diagnosis (${DiagnosisByTestType.getStepCount(selectedTestTypes)} steps)...`)
@@ -479,9 +416,16 @@ export class DiagnosisOrchestrator {
             logger.warn({ runId, error: error.message }, 'Per-test-type diagnosis failed')
         }
 
+        if (tracker) await tracker.completePhase('per_type')
+
         const comprehensiveTests: any = null
 
-        // Semantic analysis
+        // Semantic analysis (AI call)
+        if (tracker) await tracker.startPhase('ai_analysis')
+
+        // Emit progress update BEFORE the slow call so users see movement
+        if (tracker) await tracker.updateSubPhase('Running AI analysis (this may take 20s)...', 1, 1)
+
         let semanticAnalysis: any = {
             testableComponents: [],
             nonTestableComponents: [],
@@ -503,12 +447,34 @@ export class DiagnosisOrchestrator {
             priority: comp.testability === 'high' ? 'high' : comp.testability === 'medium' ? 'medium' : 'low'
         }))
 
+        // Validate critical dependencies before proceeding
+        if (!accessibilityMap || !accessibilityMap.elements) {
+            logger.error({ runId }, 'DIAGNOSIS FAILURE: accessibilityMap is undefined or has no elements')
+            throw new Error('accessibilityMap is undefined or missing elements')
+        }
+        if (!session || !session.page) {
+            logger.error({ runId }, 'DIAGNOSIS FAILURE: session or session.page is undefined')
+            throw new Error('session.page is undefined')
+        }
+
+        logger.info({
+            runId,
+            flowsCount: flows.length,
+            accessibilityMapElementsCount: accessibilityMap.elements?.length || 0
+        }, 'Starting testability assessment')
+
         const testabilityAssessment = await this.deps.enhancedTestabilityService.assessTestability(
             flows,
             accessibilityMap,
             session.page,
             () => { } // onLowConfidence callback - simplified
         )
+
+        logger.info({
+            runId,
+            testableCount: testabilityAssessment.testable?.length || 0,
+            nonTestableCount: testabilityAssessment.nonTestable?.length || 0
+        }, 'Testability assessment complete')
 
         // Verification
         const testDataStore = this.deps.getTestDataStore(runId)
@@ -524,8 +490,14 @@ export class DiagnosisOrchestrator {
             undefined
         )
 
+        logger.info({ runId, verifiedPlansCount: verifiedPlans?.length || 0 }, 'Verification complete')
+
         // Risk analysis
         await this.deps.riskAnalysisService.analyzeRisks(verifiedPlans, session.page)
+
+        logger.info({ runId }, 'Risk analysis complete')
+
+        if (tracker) await tracker.completePhase('ai_analysis')
 
         // Build analysis result
         const analysis: DiagnosisResult = {
@@ -591,7 +563,7 @@ export class DiagnosisOrchestrator {
     /**
      * Build crawler dependencies from session
      */
-    private buildCrawlerDeps(session: { id: string; page: Page }): DiagnosisCrawlerDependencies {
+    private buildCrawlerDeps(session: { id: string; page: Page }, tracker?: ProgressTracker): DiagnosisCrawlerDependencies {
         return {
             page: session.page,
             captureSnapshot: async (pageIndex: number) => {
@@ -599,7 +571,7 @@ export class DiagnosisOrchestrator {
                     sessionId: session.id,
                     pageIndex,
                     upload: true,
-                })
+                }, tracker)
                 return {
                     context: result.context,
                     analysis: result.analysis,

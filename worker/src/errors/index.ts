@@ -247,6 +247,24 @@ export class LegacyEdgeCaseError extends AppError {
 }
 
 /**
+ * Diagnosis cancelled by user
+ */
+export class DiagnosisCancelledError extends AppError {
+    constructor(
+        runId: string
+    ) {
+        super(
+            `Diagnosis cancelled for run ${runId}`,
+            'Diagnosis cancelled by user.',
+            'DIAGNOSIS_CANCELLED',
+            400,
+            true,
+            { runId }
+        )
+    }
+}
+
+/**
  * Check if an error is an operational AppError
  */
 export function isOperationalError(error: unknown): error is AppError {

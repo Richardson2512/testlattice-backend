@@ -834,6 +834,59 @@ export async function testRoutes(fastify: FastifyInstance) {
     }
   })
 
+  // Real-time progress updates via SSE (Server-Sent Events)
+  fastify.get<{ Params: { runId: string } }>('/:runId/progress', async (request: any, reply: any) => {
+    const { runId } = request.params
+    const Redis = require('ioredis')
+    // Create dedicated redis client for subscription (blocking connection)
+    const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
+    const channelName = `progress:${runId}`
+
+    fastify.log.info({ runId }, 'Client connected to progress stream')
+
+    // Set SSE headers
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    })
+
+    // Send initial connected message
+    reply.raw.write(': connected\n\n')
+
+    // Heartbeat to keep connection alive
+    const heartbeat = setInterval(() => {
+      reply.raw.write(': heartbeat\n\n')
+    }, 15000)
+
+    // Subscribe to Redis channel
+    redis.subscribe(channelName, (err: any) => {
+      if (err) {
+        request.log.error({ err }, 'Failed to subscribe to progress channel')
+        clearInterval(heartbeat)
+        reply.raw.end()
+        redis.quit()
+      }
+    })
+
+    redis.on('message', (channel: string, message: string) => {
+      if (channel === channelName) {
+        reply.raw.write(`data: ${message}\n\n`)
+      }
+    })
+
+    // Cleanup on client disconnect
+    request.raw.on('close', () => {
+      fastify.log.info({ runId }, 'Client disconnected from progress stream')
+      clearInterval(heartbeat)
+      redis.quit()
+    })
+
+    // Return reply to signal fastify we handled it (and keep connection open implicitly via raw writes)
+    return reply
+  })
+
   // Update stream URL (called by worker when switching browsers)
   fastify.post<{
     Params: { runId: string }

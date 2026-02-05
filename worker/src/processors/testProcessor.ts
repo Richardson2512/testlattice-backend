@@ -398,6 +398,7 @@ export class TestProcessor {
       enhancedTestabilityService: this.enhancedTestabilityService,
       verificationService: this.verificationService,
       riskAnalysisService: this.riskAnalysisService,
+      redis: this.redis,
       auditService: this.auditService,
       testabilityAnalyzer: this.testabilityAnalyzer,
 
@@ -2488,8 +2489,28 @@ ${parsedInstructions.structuredPlan}
     }
 
     const currentStatus = testRunData.testRun?.status
+
+    // CRITICAL: Detect race condition where test was already completed before processing
+    // This indicates a stale BullMQ job or duplicate job ID issue
+    const terminalStatuses = [TestRunStatus.COMPLETED, TestRunStatus.FAILED, TestRunStatus.CANCELLED]
+    if (terminalStatuses.includes(currentStatus)) {
+      console.error(`[${runId}] ❌ CRITICAL RACE CONDITION DETECTED!`)
+      console.error(`[${runId}] Test status is already TERMINAL (${currentStatus}) before processing started!`)
+      console.error(`[${runId}] This indicates a stale job or duplicate job ID. Aborting to prevent duplicate processing.`)
+      console.error(`[${runId}] Job data: tier=${jobData.userTier}, parentRunId=${jobData.parentRunId}`)
+      // Return early to avoid corrupt state
+      return {
+        success: false,
+        steps: [],
+        artifacts: [],
+        stage: 'execution',
+        error: `Test was already in terminal status: ${currentStatus}. This may indicate a stale job.`
+      } as ProcessResult
+    }
+
     const diagnosisData: DiagnosisResult | undefined = testRunData.testRun?.diagnosis
     const hasDiagnosis = !!diagnosisData
+
 
     // Extract tier from JobData (preferred), metadata, or default
     const runMetadata = testRunData.testRun?.metadata || {}
