@@ -148,9 +148,10 @@ export class UnifiedPreflightService {
         this.nonCookiePopupHandler = new NonCookiePopupHandler()
       }
 
-      // Set cookie status to IN_PROGRESS
-      setCookieStatus(runId, 'IN_PROGRESS')
-      this.logTrace('DETECT', 'Cookie status set to IN_PROGRESS', {})
+      // NOTE: Do NOT set cookie status here - CookieBannerHandler.handleCookieConsent()
+      // handles the status internally. Setting it here caused INVARIANT VIOLATION errors
+      // because the status was already IN_PROGRESS when handleCookieConsent checked it.
+      this.logTrace('DETECT', 'Cookie handling will be managed by CookieBannerHandler', {})
 
       // Synthesize context for cookie detection (minimal - no comprehensive testing)
       this.logTrace('CLASSIFY', 'Synthesizing context for popup detection', {})

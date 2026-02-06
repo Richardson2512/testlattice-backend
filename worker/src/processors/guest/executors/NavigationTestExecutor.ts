@@ -118,13 +118,15 @@ export class NavigationTestExecutor {
             }
 
             // FILTER: Valid internal links only for clicking
+            // Use baseUrl (already extracted) instead of window.location.hostname (not available in Node.js)
+            const hostname = new URL(baseUrl).hostname
             const validLinks = navLinks.filter(l =>
                 l.href &&
                 !l.href.startsWith('#') &&
                 !l.href.startsWith('javascript') &&
                 !l.href.startsWith('mailto') &&
                 !l.href.startsWith('tel') &&
-                (l.href.startsWith('/') || l.href.includes(window.location.hostname))
+                (l.href.startsWith('/') || l.href.includes(hostname))
             )
 
             // STEP 4: Click First Link
